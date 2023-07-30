@@ -39,6 +39,7 @@ func (f Fetcher) Fetch(dir, gitURL, gitRevision, metadataDir string) error {
 	}
 
 	err = remote.Fetch(&gogit.FetchOptions{
+		Depth: 1,
 		RefSpecs: []config.RefSpec{"refs/*:refs/*"},
 		Auth:     auth,
 	})
