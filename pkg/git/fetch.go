@@ -9,13 +9,22 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/pkg/errors"
 )
 
 type Fetcher struct {
-	Logger   *log.Logger
-	Keychain GitKeychain
+	Logger               *log.Logger
+	Keychain             GitKeychain
+	InitializeSubmodules bool
+}
+
+func init() {
+	//remove multi_ack and multi_ack_detailed from unsupported capabilities to enable Azure DevOps git support
+	transport.UnsupportedCapabilities = []capability.Capability{
+		capability.ThinPack,
+	}
 }
 
 func (f Fetcher) Fetch(dir, gitURL, gitRevision, metadataDir string) error {
@@ -64,20 +73,39 @@ func (f Fetcher) Fetch(dir, gitURL, gitRevision, metadataDir string) error {
 		return errors.Wrapf(err, "checking out revision")
 	}
 
+	if f.InitializeSubmodules {
+		submodules, err := worktree.Submodules()
+		if err != nil {
+			return errors.Wrapf(err, "getting submodules")
+		}
+
+		for _, submodule := range submodules {
+			f.Logger.Printf("Updating submodule %v", submodule.Config().URL)
+			submoduleAuth, err := f.Keychain.Resolve(submodule.Config().URL)
+			if err != nil {
+				return err
+			}
+			err = submodule.Update(&gogit.SubmoduleUpdateOptions{Auth: submoduleAuth, Init: true, RecurseSubmodules: gogit.DefaultSubmoduleRecursionDepth})
+			if err != nil {
+				return errors.Wrapf(err, "updating submodules")
+			}
+		}
+	}
+
 	projectMetadataFile, err := os.Create(path.Join(metadataDir, "project-metadata.toml"))
 	if err != nil {
 		return errors.Wrapf(err, "invalid metadata destination '%s/project-metadata.toml' for git repository: %s", metadataDir, gitURL)
 	}
 	defer projectMetadataFile.Close()
 
-	projectMd := project{
-		Source: source{
+	projectMd := Project{
+		Source: Source{
 			Type: "git",
-			Metadata: metadata{
+			Metadata: Metadata{
 				Repository: gitURL,
 				Revision:   gitRevision,
 			},
-			Version: version{
+			Version: Version{
 				Commit: hash.String(),
 			},
 		},
@@ -90,21 +118,21 @@ func (f Fetcher) Fetch(dir, gitURL, gitRevision, metadataDir string) error {
 	return nil
 }
 
-type project struct {
-	Source source `toml:"source"`
+type Project struct {
+	Source Source `toml:"source"`
 }
 
-type source struct {
+type Source struct {
 	Type     string   `toml:"type"`
-	Metadata metadata `toml:"metadata"`
-	Version  version  `toml:"version"`
+	Metadata Metadata `toml:"metadata"`
+	Version  Version  `toml:"version"`
 }
 
-type metadata struct {
+type Metadata struct {
 	Repository string `toml:"repository"`
 	Revision   string `toml:"revision"`
 }
 
-type version struct {
+type Version struct {
 	Commit string `toml:"commit"`
 }

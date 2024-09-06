@@ -2,6 +2,11 @@ package builder
 
 import (
 	"context"
+	"fmt"
+	"strings"
+
+	"github.com/google/go-containerregistry/pkg/name"
+	corev1 "k8s.io/api/core/v1"
 
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,7 +38,20 @@ const (
 )
 
 type BuilderCreator interface {
-	CreateBuilder(ctx context.Context, builderKeychain authn.Keychain, keychain authn.Keychain, fetcher cnb.RemoteBuildpackFetcher, clusterStack *buildapi.ClusterStack, spec buildapi.BuilderSpec) (buildapi.BuilderRecord, error)
+	CreateBuilder(
+		ctx context.Context,
+		builderKeychain authn.Keychain,
+		keychain authn.Keychain,
+		fetcher cnb.RemoteBuildpackFetcher,
+		clusterStack *buildapi.ClusterStack,
+		spec buildapi.BuilderSpec,
+		serviceAccountSecrets []*corev1.Secret,
+		resolvedBuilderRef string,
+	) (buildapi.BuilderRecord, error)
+}
+
+type Fetcher interface {
+	SecretsForServiceAccount(context.Context, string, string) ([]*corev1.Secret, error)
 }
 
 func NewController(
@@ -46,6 +64,7 @@ func NewController(
 	buildpackInformer buildinformers.BuildpackInformer,
 	clusterBuildpackInformer buildinformers.ClusterBuildpackInformer,
 	clusterStackInformer buildinformers.ClusterStackInformer,
+	secretFetcher Fetcher,
 ) (*controller.Impl, func()) {
 	c := &Reconciler{
 		Client:                 opt.Client,
@@ -56,6 +75,7 @@ func NewController(
 		BuildpackLister:        buildpackInformer.Lister(),
 		ClusterBuildpackLister: clusterBuildpackInformer.Lister(),
 		ClusterStackLister:     clusterStackInformer.Lister(),
+		SecretFetcher:          secretFetcher,
 	}
 
 	logger := opt.Logger.With(
@@ -108,6 +128,7 @@ type Reconciler struct {
 	BuildpackLister        buildlisters.BuildpackLister
 	ClusterBuildpackLister buildlisters.ClusterBuildpackLister
 	ClusterStackLister     buildlisters.ClusterStackLister
+	SecretFetcher          Fetcher
 }
 
 func (c *Reconciler) Reconcile(ctx context.Context, key string) error {
@@ -200,7 +221,7 @@ func (c *Reconciler) reconcileBuilder(ctx context.Context, builder *buildapi.Bui
 	}
 
 	if !clusterStack.Status.GetCondition(corev1alpha1.ConditionReady).IsTrue() {
-		return buildapi.BuilderRecord{}, errors.Errorf("stack %s is not ready", clusterStack.Name)
+		return buildapi.BuilderRecord{}, errors.Errorf("Error: clusterstack '%s' is not ready", clusterStack.Name)
 	}
 
 	builderKeychain, err := c.KeychainFactory.KeychainForSecretRef(ctx, registry.SecretRef{
@@ -224,7 +245,26 @@ func (c *Reconciler) reconcileBuilder(ctx context.Context, builder *buildapi.Bui
 
 	fetcher := cnb.NewRemoteBuildpackFetcher(c.KeychainFactory, clusterStore, buildpacks, clusterBuildpacks)
 
-	buildRecord, err := c.BuilderCreator.CreateBuilder(ctx, builderKeychain, stackKeychain, fetcher, clusterStack, builder.Spec.BuilderSpec)
+	serviceAccountSecrets, err := c.SecretFetcher.SecretsForServiceAccount(ctx, builder.Spec.ServiceAccount(), builder.Namespace)
+	if err != nil {
+		return buildapi.BuilderRecord{}, err
+	}
+
+	resolvedBuilderRef, err := resolveBuilderRef(builder)
+	if err != nil {
+		return buildapi.BuilderRecord{}, err
+	}
+
+	buildRecord, err := c.BuilderCreator.CreateBuilder(
+		ctx,
+		builderKeychain,
+		stackKeychain,
+		fetcher,
+		clusterStack,
+		builder.Spec.BuilderSpec,
+		serviceAccountSecrets,
+		resolvedBuilderRef,
+	)
 	if err != nil {
 		return buildapi.BuilderRecord{}, err
 	}
@@ -246,4 +286,20 @@ func (c *Reconciler) updateStatus(ctx context.Context, desired *buildapi.Builder
 
 	_, err = c.Client.KpackV1alpha2().Builders(desired.Namespace).UpdateStatus(ctx, desired, metav1.UpdateOptions{})
 	return err
+}
+
+func resolveBuilderRef(builder *buildapi.Builder) (string, error) {
+	parsedRef, err := name.ParseReference(builder.Spec.Tag)
+	if err != nil {
+		return "", err
+	}
+
+	// this happens if there is no tag
+	if parsedRef.Identifier() == "latest" {
+		return parsedRef.
+			Context().
+			Tag(fmt.Sprintf("%s-%s-%s", strings.ToLower(buildapi.BuilderKind), builder.Namespace, builder.Name)).Name(), nil
+	}
+
+	return parsedRef.Name(), nil
 }

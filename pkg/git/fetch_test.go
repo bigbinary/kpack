@@ -25,8 +25,10 @@ func testGitCheckout(t *testing.T, when spec.G, it spec.S) {
 			Logger:   log.New(outputBuffer, "", 0),
 			Keychain: fakeGitKeychain{},
 		}
-		var testDir string
-		var metadataDir string
+		var (
+			testDir     string
+			metadataDir string
+		)
 
 		it.Before(func() {
 			var err error
@@ -54,7 +56,7 @@ func testGitCheckout(t *testing.T, when spec.G, it spec.S) {
 				p := path.Join(metadataDir, "project-metadata.toml")
 				require.FileExists(t, p)
 
-				var projectMetadata project
+				var projectMetadata Project
 				_, err = toml.DecodeFile(p, &projectMetadata)
 				require.NoError(t, err)
 				require.Equal(t, "git", projectMetadata.Source.Type)
@@ -90,10 +92,10 @@ func testGitCheckout(t *testing.T, when spec.G, it spec.S) {
 		})
 
 		it("preserves executable permission", func() {
-			err := fetcher.Fetch(testDir, "https://github.com/pivotal/kpack", "main", metadataDir)
+			err := fetcher.Fetch(testDir, "https://github.com/pivotal/kpack", "b8c0d491135595cc00ab78f6214bef8a7a20afd8", metadataDir)
 			require.NoError(t, err)
 
-			fileInfo, err := os.Lstat(path.Join(testDir, "hack", "apply.sh"))
+			fileInfo, err := os.Lstat(path.Join(testDir, "hack", "local.sh"))
 			require.NoError(t, err)
 			require.True(t, isExecutableByAll(fileInfo.Mode()))
 
@@ -102,9 +104,38 @@ func testGitCheckout(t *testing.T, when spec.G, it spec.S) {
 			require.False(t, isExecutableByAny(fileInfo.Mode()))
 		})
 
+		it("records project-metadata.toml", func() {
+			err := fetcher.Fetch(testDir, "https://github.com/git-fixtures/basic", "b029517f6300c2da0f4b651b8642506cd6aaf45d", metadataDir)
+			require.NoError(t, err)
+
+			p := path.Join(metadataDir, "project-metadata.toml")
+			contents, err := os.ReadFile(p)
+			require.NoError(t, err)
+
+			expectedFile := `[source]
+  type = "git"
+  [source.metadata]
+    repository = "https://github.com/git-fixtures/basic"
+    revision = "b029517f6300c2da0f4b651b8642506cd6aaf45d"
+  [source.version]
+    commit = "b029517f6300c2da0f4b651b8642506cd6aaf45d"
+`
+			require.Equal(t, expectedFile, string(contents))
+		})
+
 		it("returns invalid credentials to fetch error on authentication required", func() {
 			err := fetcher.Fetch(testDir, "git@bitbucket.com:org/repo", "main", metadataDir)
 			require.ErrorContains(t, err, "unable to fetch references for repository")
+		})
+
+		it("initializes submodules", func() {
+			fetcher.InitializeSubmodules = true
+			err := fetcher.Fetch(testDir, "https://github.com/git-fixtures/submodule", "master", metadataDir)
+			require.NoError(t, err)
+
+			_, err = os.Lstat(path.Join(testDir, "basic", ".gitignore"))
+			require.NoError(t, err)
+
 		})
 	})
 }

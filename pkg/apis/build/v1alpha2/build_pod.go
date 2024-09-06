@@ -43,6 +43,7 @@ const (
 	cosignRespositoryAnnotationPrefix      = "kpack.io/cosign.repository"
 	DOCKERSecretAnnotationPrefix           = "kpack.io/docker"
 	GITSecretAnnotationPrefix              = "kpack.io/git"
+	BlobSecretAnnotationPrefix             = "kpack.io/blob"
 	IstioInject                            = "sidecar.istio.io/inject"
 	BuildReadyAnnotation                   = "build.kpack.io/ready"
 
@@ -67,6 +68,17 @@ const (
 	TerminationMessagePathEnvVar = "TERMINATION_MESSAGE_PATH"
 
 	PlatformEnvVarPrefix = "PLATFORM_ENV_"
+)
+
+var (
+	PrepareCommand    = "/cnb/process/build-init"
+	AnalyzeCommand    = "/cnb/lifecycle/analyzer"
+	DetectCommand     = "/cnb/lifecycle/detector"
+	RestoreCommand    = "/cnb/lifecycle/restorer"
+	BuildCommand      = "/cnb/lifecycle/builder"
+	ExportCommand     = "/cnb/lifecycle/exporter"
+	CompletionCommand = "/cnb/process/completion"
+	RebaseCommand     = "/cnb/process/rebase"
 )
 
 type ServiceBinding interface {
@@ -223,7 +235,9 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 		buildEnv = append(buildEnv, envVar)
 	}
 
-	secretVolumes, secretVolumeMounts, secretArgs := b.setupSecretVolumesAndArgs(buildContext.Secrets, gitAndDockerSecrets)
+	blobAuthUseSecrets := b.Spec.Source.Blob != nil && b.Spec.Source.Blob.Auth == string(corev1alpha1.BlobAuthSecret)
+
+	secretVolumes, secretVolumeMounts, secretArgs := b.setupSecretVolumesAndArgs(buildContext.Secrets, buildSecrets(blobAuthUseSecrets))
 	cosignVolumes, cosignVolumeMounts, cosignSecretArgs := b.setupCosignVolumes(buildContext.Secrets)
 	imagePullVolumes, imagePullVolumeMounts, imagePullArgs := b.setupImagePullVolumes(buildContext.ImagePullSecrets)
 
@@ -242,7 +256,6 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 		MountPath: sourceMount.MountPath,
 		SubPath:   b.Spec.Source.SubPath, // empty string is a nop
 	}
-	platformAPILessThan07 := platformAPI.LessThan(semver.MustParse("0.7"))
 	var genericCacheArgs []string
 	var analyzerCacheArgs []string = nil
 	var exporterCacheArgs []string
@@ -251,9 +264,6 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 	if b.Spec.NeedVolumeCache() && buildContext.os() != "windows" {
 		genericCacheArgs = []string{"-cache-dir=/cache"}
 		cacheVolumes = []corev1.VolumeMount{cacheMount}
-		if platformAPILessThan07 {
-			analyzerCacheArgs = genericCacheArgs
-		}
 		exporterCacheArgs = genericCacheArgs
 	} else if b.Spec.NeedRegistryCache() {
 		useCacheFromLastBuild := b.Spec.LastBuild != nil && b.Spec.LastBuild.Cache.Image != ""
@@ -269,29 +279,16 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 	analyzeContainer := corev1.Container{
 		Name:      AnalyzeContainerName,
 		Image:     b.Spec.Builder.Image,
-		Command:   []string{"/cnb/lifecycle/analyzer"},
+		Command:   []string{AnalyzeCommand},
 		Resources: b.Spec.Resources,
 		Args: args(
-			[]string{"-layers=/layers", "-analyzed=/layers/analyzed.toml"},
-			func() []string {
-				if !platformAPILessThan07 {
-					return []string{"-run-image=" + runImage}
-				}
-				return []string{}
-			}(),
+			[]string{
+				"-layers=/layers",
+				"-analyzed=/layers/analyzed.toml",
+				"-run-image=" + runImage,
+			},
 			analyzerCacheArgs,
 			func() []string {
-				if platformAPILessThan07 {
-					return []string{
-						"-group=/layers/group.toml",
-					}
-				}
-				return []string{}
-			}(),
-			func() []string {
-				if platformAPILessThan07 {
-					return []string{}
-				}
 				tags := []string{}
 				if len(b.Spec.Tags) > 1 {
 					for _, tag := range b.Spec.Tags[1:] {
@@ -302,9 +299,6 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 			}(),
 			func() []string {
 				if b.Spec.LastBuild != nil && b.Spec.LastBuild.Image != "" {
-					if platformAPILessThan07 {
-						return []string{b.Spec.LastBuild.Image}
-					}
 					return []string{"-previous-image=" + b.Spec.LastBuild.Image, b.Tag()}
 				}
 				return []string{b.Tag()}
@@ -315,12 +309,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 			layersMount,
 			workspaceVolume,
 			homeMount,
-		}, func() []corev1.VolumeMount {
-			if platformAPILessThan07 {
-				return cacheVolumes
-			}
-			return []corev1.VolumeMount{}
-		}()),
+		}),
 		Env: []corev1.EnvVar{
 			homeEnv,
 			platformApiVersionEnvVar,
@@ -337,7 +326,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 	detectContainer := corev1.Container{
 		Name:      DetectContainerName,
 		Image:     b.Spec.Builder.Image,
-		Command:   []string{"/cnb/lifecycle/detector"},
+		Command:   []string{DetectCommand},
 		Resources: b.Spec.Resources,
 		Args: []string{
 			"-app=/workspace",
@@ -386,7 +375,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 					corev1.Container{
 						Name:    CompletionContainerName,
 						Image:   images.completion(buildContext.os()),
-						Command: []string{"/cnb/process/completion"},
+						Command: []string{CompletionCommand},
 						Env: []corev1.EnvVar{
 							homeEnv,
 							{Name: CacheTagEnvVar, Value: b.Spec.RegistryCacheTag()},
@@ -421,7 +410,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 					corev1.Container{
 						Name:            PrepareContainerName,
 						Image:           images.buildInit(buildContext.os()),
-						Command:         []string{"/cnb/process/build-init"},
+						Command:         []string{PrepareCommand},
 						Args:            append(secretArgs, imagePullArgs...),
 						Resources:       b.Spec.Resources,
 						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
@@ -484,50 +473,21 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 					},
 					ifWindows(buildContext.os(), addNetworkWaitLauncherVolume())...,
 				)
-				step(
-					func() corev1.Container {
-						if platformAPILessThan07 {
-							return detectContainer
-						}
-						return analyzeContainer
-					}(),
-					func() []stepModifier {
-						if platformAPILessThan07 {
-							return detectContainerMods
-						}
-						return analyzerContainerMods
-					}()...,
-				)
-				step(
-					func() corev1.Container {
-						if platformAPILessThan07 {
-							return analyzeContainer
-						}
-						return detectContainer
-					}(),
-					func() []stepModifier {
-						if platformAPILessThan07 {
-							return analyzerContainerMods
-						}
-						return detectContainerMods
-					}()...,
-				)
+				step(analyzeContainer, analyzerContainerMods...)
+				step(detectContainer, detectContainerMods...)
 				step(
 					corev1.Container{
 						Name:            RestoreContainerName,
 						Image:           b.Spec.Builder.Image,
-						Command:         []string{"/cnb/lifecycle/restorer"},
+						Command:         []string{RestoreCommand},
 						Resources:       b.Spec.Resources,
 						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
 						Args: args([]string{
 							"-group=/layers/group.toml",
 							"-layers=/layers",
-						}, genericCacheArgs, func() []string {
-							if platformAPILessThan07 {
-								return []string{}
-							}
-							return []string{"-analyzed=/layers/analyzed.toml"}
-						}()),
+						},
+							genericCacheArgs,
+							[]string{"-analyzed=/layers/analyzed.toml"}),
 						VolumeMounts: volumeMounts([]corev1.VolumeMount{
 							layersMount,
 							homeMount,
@@ -548,7 +508,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 					corev1.Container{
 						Name:            BuildContainerName,
 						Image:           b.Spec.Builder.Image,
-						Command:         []string{"/cnb/lifecycle/builder"},
+						Command:         []string{BuildCommand},
 						Resources:       b.Spec.Resources,
 						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
 						Args: []string{
@@ -574,7 +534,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 					corev1.Container{
 						Name:            ExportContainerName,
 						Image:           b.Spec.Builder.Image,
-						Command:         []string{"/cnb/lifecycle/exporter"},
+						Command:         []string{ExportCommand},
 						Resources:       b.Spec.Resources,
 						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
 						Args: args(
@@ -588,27 +548,11 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							exporterCacheArgs,
 							func() []string {
 								if b.DefaultProcess() == "" {
-									if platformAPI.Equal(lowestSupportedPlatformVersion) || platformAPI.GreaterThan(semver.MustParse("0.5")) {
-										return nil
-									} else {
-										return []string{fmt.Sprintf("-process-type=web")}
-									}
+									return nil
 								}
 								return []string{fmt.Sprintf("-process-type=%s", b.DefaultProcess())}
 							}(),
-							func() []string {
-								if platformAPI.Equal(lowestSupportedPlatformVersion) {
-									return nil
-								}
-								return []string{fmt.Sprintf("-report=%s", ReportTOMLPath)}
-
-							}(),
-							func() []string {
-								if platformAPILessThan07 {
-									return []string{"-run-image=" + runImage}
-								}
-								return []string{}
-							}(),
+							[]string{fmt.Sprintf("-report=%s", ReportTOMLPath)},
 							b.Spec.Tags),
 						VolumeMounts: volumeMounts([]corev1.VolumeMount{
 							layersMount,
@@ -953,7 +897,7 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 				{
 					Name:    CompletionContainerName,
 					Image:   images.completion(buildContext.os()),
-					Command: []string{"/cnb/process/completion"},
+					Command: []string{CompletionCommand},
 					Env: []corev1.EnvVar{
 						{Name: CacheTagEnvVar, Value: b.Spec.RegistryCacheTag()},
 						{Name: TerminationMessagePathEnvVar, Value: completionTerminationMessagePath},
@@ -980,7 +924,7 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 				{
 					Name:            RebaseContainerName,
 					Image:           images.RebaseImage,
-					Command:         []string{"/cnb/process/rebase"},
+					Command:         []string{RebaseCommand},
 					Resources:       b.Spec.Resources,
 					SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
 					Args: args(a(
@@ -1037,8 +981,18 @@ func (b *Build) cacheVolume(os string) []corev1.Volume {
 	}}
 }
 
-func gitAndDockerSecrets(secret corev1.Secret) bool {
-	return secret.Annotations[GITSecretAnnotationPrefix] != "" || dockerSecrets(secret)
+func buildSecrets(includeBlobSecrets bool) func(corev1.Secret) bool {
+	return func(secret corev1.Secret) bool {
+		return gitSecrets(secret) || blobSecrets(includeBlobSecrets, secret) || dockerSecrets(secret)
+	}
+}
+
+func gitSecrets(secret corev1.Secret) bool {
+	return secret.Annotations[GITSecretAnnotationPrefix] != ""
+}
+
+func blobSecrets(includeBlobSecret bool, secret corev1.Secret) bool {
+	return includeBlobSecret && secret.Annotations[BlobSecretAnnotationPrefix] != ""
 }
 
 func dockerSecrets(secret corev1.Secret) bool {
@@ -1068,6 +1022,9 @@ func (b *Build) setupSecretVolumesAndArgs(secrets []corev1.Secret, filter func(s
 		case secret.Type == corev1.SecretTypeSSHAuth:
 			annotatedUrl := secret.Annotations[GITSecretAnnotationPrefix]
 			args = append(args, fmt.Sprintf("-ssh-%s=%s=%s", "git", secret.Name, annotatedUrl))
+		case secret.Annotations[BlobSecretAnnotationPrefix] != "":
+			annotatedUrl := secret.Annotations[BlobSecretAnnotationPrefix]
+			args = append(args, fmt.Sprintf("-blob=%s=%s", secret.Name, annotatedUrl))
 		default:
 			//ignoring secret
 			continue
@@ -1154,19 +1111,11 @@ func (b *Build) setupCosignVolumes(secrets []corev1.Secret) ([]corev1.Volume, []
 }
 
 var (
-	lowestSupportedPlatformVersion = semver.MustParse("0.3")
-
-	supportedPlatformAPIVersionsWithWindowsAndReportToml = []*semver.Version{semver.MustParse("0.9"), semver.MustParse("0.8"), semver.MustParse("0.7"), semver.MustParse("0.6"), semver.MustParse("0.5"), semver.MustParse("0.4")}
-	supportedPlatformAPIVersions                         = append(supportedPlatformAPIVersionsWithWindowsAndReportToml, semver.MustParse("0.3"))
+	supportedPlatformAPIVersions = []*semver.Version{semver.MustParse("0.9"), semver.MustParse("0.8"), semver.MustParse("0.7")}
 )
 
 func (bc BuildContext) highestSupportedPlatformAPI(b *Build) (*semver.Version, error) {
-	for _, supportedVersion := range func() []*semver.Version {
-		if b.NotaryV1Config() != nil || bc.BuildPodBuilderConfig.OS == "windows" {
-			return supportedPlatformAPIVersionsWithWindowsAndReportToml
-		}
-		return supportedPlatformAPIVersions
-	}() {
+	for _, supportedVersion := range supportedPlatformAPIVersions {
 		if bc.MaximumPlatformApiVersion != nil && bc.MaximumPlatformApiVersion.LessThan(supportedVersion) {
 			continue
 		}
@@ -1202,7 +1151,7 @@ func setupBindingVolumesAndMounts(bindings []ServiceBinding) ([]corev1.Volume, [
 		switch b := binding.(type) {
 		case *corev1alpha1.ServiceBinding:
 			if b.SecretRef != nil {
-				secretVolume := fmt.Sprintf("service-binding-secret-%s", b.Name)
+				secretVolume := fmt.Sprintf("binding-%s", b.Name)
 				volumes = append(volumes,
 					corev1.Volume{
 						Name: secretVolume,

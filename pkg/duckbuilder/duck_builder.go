@@ -20,6 +20,10 @@ func (b *DuckBuilder) GetName() string {
 	return b.Name
 }
 
+func (b *DuckBuilder) GetNamespace() string {
+	return b.Namespace
+}
+
 func (b *DuckBuilder) GetKind() string {
 	return b.Kind
 }
@@ -31,6 +35,11 @@ type DuckBuilderSpec struct {
 func (b *DuckBuilder) Ready() bool {
 	return b.Status.GetCondition(corev1alpha1.ConditionReady).IsTrue() &&
 		(b.Generation == b.Status.ObservedGeneration)
+}
+
+func (b *DuckBuilder) UpToDate() bool {
+ 	return b.Status.GetCondition(buildapi.ConditionUpToDate).IsTrue() &&
+ 		(b.Generation == b.Status.ObservedGeneration)
 }
 
 func (b *DuckBuilder) BuildBuilderSpec() corev1alpha1.BuildBuilderSpec {

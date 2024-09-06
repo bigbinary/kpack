@@ -5721,6 +5721,9 @@
           "x-kubernetes-patch-merge-key": "type",
           "x-kubernetes-patch-strategy": "merge"
         },
+        "latestAttestationImage": {
+          "type": "string"
+        },
         "latestCacheImage": {
           "type": "string"
         },
@@ -5879,6 +5882,13 @@
     "kpack.build.v1alpha2.BuilderSpec": {
       "type": "object",
       "properties": {
+        "additionalLabels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "default": ""
+          }
+        },
         "order": {
           "type": "array",
           "items": {
@@ -5945,6 +5955,13 @@
         },
         "os": {
           "type": "string"
+        },
+        "signaturePaths": {
+          "type": "array",
+          "items": {
+            "default": {},
+            "$ref": "#/definitions/kpack.build.v1alpha2.CosignSignature"
+          }
         },
         "stack": {
           "default": {},
@@ -6108,6 +6125,13 @@
     "kpack.build.v1alpha2.ClusterBuilderSpec": {
       "type": "object",
       "properties": {
+        "additionalLabels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "default": ""
+          }
+        },
         "order": {
           "type": "array",
           "items": {
@@ -6193,13 +6217,11 @@
     "kpack.build.v1alpha2.ClusterBuildpackSpec": {
       "type": "object",
       "properties": {
+        "image": {
+          "type": "string"
+        },
         "serviceAccountRef": {
           "$ref": "#/definitions/io.k8s.api.core.v1.ObjectReference"
-        },
-        "source": {
-          "default": {},
-          "x-kubernetes-list-type": "",
-          "$ref": "#/definitions/kpack.core.v1alpha1.ImageSource"
         }
       }
     },
@@ -6498,6 +6520,23 @@
         }
       }
     },
+    "kpack.build.v1alpha2.CosignSignature": {
+      "type": "object",
+      "required": [
+        "signingSecret",
+        "targetDigest"
+      ],
+      "properties": {
+        "signingSecret": {
+          "type": "string",
+          "default": ""
+        },
+        "targetDigest": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
     "kpack.build.v1alpha2.Image": {
       "type": "object",
       "required": [
@@ -6782,6 +6821,13 @@
     "kpack.build.v1alpha2.NamespacedBuilderSpec": {
       "type": "object",
       "properties": {
+        "additionalLabels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "default": ""
+          }
+        },
         "order": {
           "type": "array",
           "items": {
@@ -6954,6 +7000,9 @@
         "url"
       ],
       "properties": {
+        "auth": {
+          "type": "string"
+        },
         "stripComponents": {
           "type": "integer",
           "format": "int64"
@@ -7159,8 +7208,7 @@
       "properties": {
         "lastTransitionTime": {
           "description": "LastTransitionTime is the last time the condition transitioned from one status to another. We use VolatileTime in place of metav1.Time to exclude this from creating equality.Semantic differences (all other things held constant).",
-          "type": "string",
-          "default": {}
+          "type": "string"
         },
         "message": {
           "description": "A human readable message indicating details about the transition.",
@@ -7193,6 +7241,9 @@
         "revision"
       ],
       "properties": {
+        "initializeSubmodules": {
+          "type": "boolean"
+        },
         "revision": {
           "type": "string",
           "default": ""
@@ -7310,6 +7361,9 @@
         "type"
       ],
       "properties": {
+        "initializeSubmodules": {
+          "type": "boolean"
+        },
         "revision": {
           "type": "string",
           "default": ""
@@ -7412,7 +7466,6 @@
       ],
       "properties": {
         "inner": {
-          "default": {},
           "$ref": "#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
         }
       }

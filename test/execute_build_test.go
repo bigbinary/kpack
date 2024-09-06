@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -35,13 +34,11 @@ import (
 	"github.com/pivotal/kpack/pkg/registry"
 )
 
-func TestCreateImage(t *testing.T) {
-	rand.Seed(time.Now().Unix())
-
+func TestKpackE2E(t *testing.T) {
 	spec.Run(t, "CreateImage", testCreateImage)
 }
 
-func testCreateImage(t *testing.T, when spec.G, it spec.S) {
+func testCreateImage(t *testing.T, _ spec.G, it spec.S) {
 	const (
 		testNamespace        = "test"
 		dockerSecret         = "docker-secret"
@@ -452,7 +449,8 @@ func testCreateImage(t *testing.T, when spec.G, it spec.S) {
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
-		waitUntilReady(t, ctx, clients, builder, clusterBuilder)
+		waitUntilCondition(t, ctx, clients, corev1alpha1.ConditionReady, builder, clusterBuilder)
+		waitUntilCondition(t, ctx, clients, buildapi.ConditionUpToDate, builder, clusterBuilder)
 	})
 
 	it("builds and rebases git, blob, and registry images from unauthenticated sources", func() {
@@ -487,7 +485,7 @@ func testCreateImage(t *testing.T, when spec.G, it spec.S) {
 
 		basicSecret, basicAuthRepo := cfg.makeGitBasicAuthSecret(gitBasicSecret, testNamespace)
 		if basicSecret != nil {
-			_, err = clients.k8sClient.CoreV1().Secrets(testNamespace).Create(ctx, basicSecret, metav1.CreateOptions{})
+			_, err := clients.k8sClient.CoreV1().Secrets(testNamespace).Create(ctx, basicSecret, metav1.CreateOptions{})
 			require.NoError(t, err)
 
 			sa.Secrets = append(sa.Secrets, corev1.ObjectReference{
@@ -497,7 +495,7 @@ func testCreateImage(t *testing.T, when spec.G, it spec.S) {
 
 		sshSecret, sshAuthRepo := cfg.makeGitSSHAuthSecret(gitSSHSecret, testNamespace)
 		if sshSecret != nil {
-			_, err = clients.k8sClient.CoreV1().Secrets(testNamespace).Create(ctx, sshSecret, metav1.CreateOptions{})
+			_, err := clients.k8sClient.CoreV1().Secrets(testNamespace).Create(ctx, sshSecret, metav1.CreateOptions{})
 			require.NoError(t, err)
 
 			sa.Secrets = append(sa.Secrets, corev1.ObjectReference{
@@ -638,7 +636,7 @@ func readNamespaceLabelsFromEnv() map[string]string {
 	return labelsToSet
 }
 
-func waitUntilReady(t *testing.T, ctx context.Context, clients *clients, objects ...kmeta.OwnerRefable) {
+func waitUntilCondition(t *testing.T, ctx context.Context, clients *clients, condition corev1alpha1.ConditionType, objects ...kmeta.OwnerRefable) {
 	for _, ob := range objects {
 		namespace := ob.GetObjectMeta().GetNamespace()
 		name := ob.GetObjectMeta().GetName()
@@ -652,7 +650,27 @@ func waitUntilReady(t *testing.T, ctx context.Context, clients *clients, objects
 			err = duck.FromUnstructured(unstructured, kResource)
 			require.NoError(t, err)
 
-			return kResource.Status.GetCondition(apis.ConditionReady).IsTrue()
+			return kResource.Status.GetCondition(apis.ConditionType(condition)).IsTrue()
+		}, 1*time.Second, 8*time.Minute)
+	}
+}
+
+func waitUntilFailed(t *testing.T, ctx context.Context, clients *clients, condition corev1alpha1.ConditionType, expectedMessage string, objects ...kmeta.OwnerRefable) {
+	for _, ob := range objects {
+		namespace := ob.GetObjectMeta().GetNamespace()
+		name := ob.GetObjectMeta().GetName()
+		gvr, _ := meta.UnsafeGuessKindToResource(ob.GetGroupVersionKind())
+
+		eventually(t, func() bool {
+			unstructured, err := clients.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+			require.NoError(t, err)
+
+			kResource := &duckv1.KResource{}
+			err = duck.FromUnstructured(unstructured, kResource)
+			require.NoError(t, err)
+
+			condition := kResource.Status.GetCondition(apis.ConditionType(condition))
+			return condition.IsFalse() && condition.Message != "" && strings.Contains(condition.Message, expectedMessage)
 		}, 1*time.Second, 8*time.Minute)
 	}
 }
@@ -668,7 +686,7 @@ func validateImageCreate(t *testing.T, clients *clients, image *buildapi.Image, 
 	}()
 
 	t.Logf("Waiting for image '%s' to be created", image.Name)
-	waitUntilReady(t, ctx, clients, image)
+	waitUntilCondition(t, ctx, clients, corev1alpha1.ConditionReady, image)
 
 	registryClient := &registry.Client{}
 	_, identifier, err := registryClient.Fetch(authn.DefaultKeychain, image.Spec.Tag)

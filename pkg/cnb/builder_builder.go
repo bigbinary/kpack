@@ -51,6 +51,7 @@ type builderBlder struct {
 	runImage          string
 	mixins            []string
 	os                string
+	additionalLabels  map[string]string
 }
 
 func newBuilderBldr(kpackVersion string) *builderBlder {
@@ -59,7 +60,6 @@ func newBuilderBldr(kpackVersion string) *builderBlder {
 		kpackVersion:    kpackVersion,
 	}
 }
-
 func (bb *builderBlder) AddStack(baseImage v1.Image, clusterStack *buildapi.ClusterStack) error {
 	file, err := baseImage.ConfigFile()
 	if err != nil {
@@ -69,7 +69,6 @@ func (bb *builderBlder) AddStack(baseImage v1.Image, clusterStack *buildapi.Clus
 	bb.os = file.OS
 	bb.baseImage = baseImage
 	bb.stackId = clusterStack.Status.Id
-	bb.runImage = clusterStack.Status.RunImage.Image
 	bb.mixins = clusterStack.Status.Mixins
 	bb.cnbUserId = clusterStack.Status.UserID
 	bb.cnbGroupId = clusterStack.Status.GroupID
@@ -91,6 +90,10 @@ func (bb *builderBlder) AddGroup(buildpacks ...RemoteBuildpackRef) {
 		}
 	}
 	bb.order = append(bb.order, corev1alpha1.OrderEntry{Group: group})
+}
+
+func (bb *builderBlder) AddAdditionalLabels(additionalLabels map[string]string) {
+	bb.additionalLabels = additionalLabels
 }
 
 func (bb *builderBlder) WriteableImage() (v1.Image, error) {
@@ -151,6 +154,11 @@ func (bb *builderBlder) WriteableImage() (v1.Image, error) {
 		return nil, err
 	}
 
+	image, err = imagehelpers.SetStringLabels(image, bb.additionalLabels)
+	if err != nil {
+		return nil, err
+	}
+
 	return imagehelpers.SetLabels(image, map[string]interface{}{
 		buildpackOrderLabel:  bb.order,
 		buildpackLayersLabel: buildpackLayerMetadata,
@@ -171,6 +179,10 @@ func (bb *builderBlder) WriteableImage() (v1.Image, error) {
 			Buildpacks: buildpacks,
 		},
 	})
+}
+
+func (bb *builderBlder) AddRunImage(runImage string) {
+	bb.runImage = runImage
 }
 
 func (bb *builderBlder) validateBuilder(sortedBuildpacks []DescriptiveBuildpackInfo) error {

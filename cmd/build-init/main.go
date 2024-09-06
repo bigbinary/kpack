@@ -32,15 +32,17 @@ var (
 	imageTag = flag.String("imageTag", os.Getenv("IMAGE_TAG"), "tag of image that will get created by the lifecycle")
 	runImage = flag.String("runImage", os.Getenv("RUN_IMAGE"), "The base image from which application images are built.")
 
-	gitURL          = flag.String("git-url", os.Getenv("GIT_URL"), "The url of the Git repository to initialize.")
-	gitRevision     = flag.String("git-revision", os.Getenv("GIT_REVISION"), "The Git revision to make the repository HEAD.")
-	blobURL         = flag.String("blob-url", os.Getenv("BLOB_URL"), "The url of the source code blob.")
-	stripComponents = flag.Int("strip-components", getenvInt("BLOB_STRIP_COMPONENTS", 0), "The number of directory components to strip from the blobs content when extracting.")
-	registryImage   = flag.String("registry-image", os.Getenv("REGISTRY_IMAGE"), "The registry location of the source code image.")
-	hostName        = flag.String("dns-probe-hostname", os.Getenv("DNS_PROBE_HOSTNAME"), "hostname to dns poll")
-	sourceSubPath   = flag.String("source-sub-path", os.Getenv("SOURCE_SUB_PATH"), "the subpath inside the source directory that will be the buildpack workspace")
-	buildChanges    = flag.String("build-changes", os.Getenv("BUILD_CHANGES"), "JSON string of build changes and their reason")
-	descriptorPath  = flag.String("project-descriptor-path", os.Getenv("PROJECT_DESCRIPTOR_PATH"), "path to project descriptor file")
+	gitURL                  = flag.String("git-url", os.Getenv("GIT_URL"), "The url of the Git repository to initialize.")
+	gitRevision             = flag.String("git-revision", os.Getenv("GIT_REVISION"), "The Git revision to make the repository HEAD.")
+	gitInitializeSubmodules = flag.Bool("git-initialize-submodules", getenvBool("GIT_INITIALIZE_SUBMODULES"), "Initialize submodules during git clone")
+	blobURL                 = flag.String("blob-url", os.Getenv("BLOB_URL"), "The url of the source code blob.")
+	blobAuth                = flag.Bool("blob-auth", getenvBool("BLOB_AUTH"), "If authentication should be used for blobs")
+	stripComponents         = flag.Int("strip-components", getenvInt("BLOB_STRIP_COMPONENTS", 0), "The number of directory components to strip from the blobs content when extracting.")
+	registryImage           = flag.String("registry-image", os.Getenv("REGISTRY_IMAGE"), "The registry location of the source code image.")
+	hostName                = flag.String("dns-probe-hostname", os.Getenv("DNS_PROBE_HOSTNAME"), "hostname to dns poll")
+	sourceSubPath           = flag.String("source-sub-path", os.Getenv("SOURCE_SUB_PATH"), "the subpath inside the source directory that will be the buildpack workspace")
+	buildChanges            = flag.String("build-changes", os.Getenv("BUILD_CHANGES"), "JSON string of build changes and their reason")
+	descriptorPath          = flag.String("project-descriptor-path", os.Getenv("PROJECT_DESCRIPTOR_PATH"), "path to project descriptor file")
 
 	builderImage = flag.String("builder-image", os.Getenv("BUILDER_IMAGE"), "The builder image used to build the application")
 	builderName  = flag.String("builder-name", os.Getenv("BUILDER_NAME"), "The builder name provided during creation")
@@ -48,6 +50,7 @@ var (
 
 	basicGitCredentials     flaghelpers.CredentialsFlags
 	sshGitCredentials       flaghelpers.CredentialsFlags
+	blobCredentials         flaghelpers.CredentialsFlags
 	basicDockerCredentials  flaghelpers.CredentialsFlags
 	dockerCfgCredentials    flaghelpers.CredentialsFlags
 	dockerConfigCredentials flaghelpers.CredentialsFlags
@@ -59,6 +62,7 @@ var (
 func init() {
 	flag.Var(&basicGitCredentials, "basic-git", "Basic authentication for git of the form 'secretname=git.domain.com'")
 	flag.Var(&sshGitCredentials, "ssh-git", "SSH authentication for git of the form 'secretname=git.domain.com'")
+	flag.Var(&blobCredentials, "blob", "Authentication for blob of the form 'secretname=git.domain.com'")
 	flag.Var(&basicDockerCredentials, "basic-docker", "Basic authentication for docker of the form 'secretname=git.domain.com'")
 	flag.Var(&dockerCfgCredentials, "dockercfg", "Docker Cfg credentials in the form of the path to the credential")
 	flag.Var(&dockerConfigCredentials, "dockerconfig", "Docker Config JSON credentials in the form of the path to the credential")
@@ -71,7 +75,7 @@ const (
 	platformDir                  = "/platform"
 	buildSecretsDir              = "/var/build-secrets"
 	registrySourcePullSecretsDir = "/registrySourcePullSecrets"
-	projectMetadataDir           = "/projectMetadata"
+	projectMetadataDir           = "/projectMetadata" // place to write project-metadata.toml which gets exported to image label by the lifecycle
 	networkWaitLauncherDir       = "/networkWait"
 	networkWaitLauncherBinary    = "network-wait-launcher.exe"
 )
@@ -207,16 +211,41 @@ func fetchSource(logger *log.Logger, keychain authn.Keychain) error {
 			return err
 		}
 
+		var initializeSubmodules bool
+		if gitInitializeSubmodules != nil {
+			initializeSubmodules = *gitInitializeSubmodules
+		}
+
 		fetcher := git.Fetcher{
-			Logger:   logger,
-			Keychain: gitKeychain,
+			Logger:               logger,
+			Keychain:             gitKeychain,
+			InitializeSubmodules: initializeSubmodules,
 		}
 		return fetcher.Fetch(appDir, *gitURL, *gitRevision, projectMetadataDir)
 	case *blobURL != "":
-		fetcher := blob.Fetcher{
-			Logger: logger,
+		var (
+			blobKeychain blob.Keychain
+			err          error
+		)
+		if *blobAuth {
+			if len(blobCredentials) == 0 {
+				logger.Println("Loading blob credentials from helpers")
+				blobKeychain = blob.DefaultKeychain
+			} else {
+				logger.Println("Loading blob credentials from service account secrets")
+				logLoadingSecrets(logger, blobCredentials)
+				blobKeychain, err = blob.NewMountedSecretBlobKeychain(buildSecretsDir, blobCredentials)
+				if err != nil {
+					return err
+				}
+			}
 		}
-		return fetcher.Fetch(appDir, *blobURL, *stripComponents)
+
+		fetcher := blob.Fetcher{
+			Logger:   logger,
+			Keychain: blobKeychain,
+		}
+		return fetcher.Fetch(appDir, *blobURL, *stripComponents, projectMetadataDir)
 	case *registryImage != "":
 		registrySourcePullSecrets, err := dockercreds.ParseDockerConfigSecret(registrySourcePullSecretsDir)
 		if err != nil {
@@ -228,7 +257,7 @@ func fetchSource(logger *log.Logger, keychain authn.Keychain) error {
 			Client:   &registry.Client{},
 			Keychain: authn.NewMultiKeychain(registrySourcePullSecrets, keychain),
 		}
-		return fetcher.Fetch(appDir, *registryImage)
+		return fetcher.Fetch(appDir, *registryImage, projectMetadataDir)
 	default:
 		return errors.New("no git url, blob url, or registry image provided")
 	}
@@ -296,4 +325,13 @@ func getenvInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	return atoi
+}
+
+func getenvBool(key string) bool {
+	value := os.Getenv(key)
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return false
+	}
+	return b
 }

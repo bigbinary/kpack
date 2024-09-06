@@ -50,6 +50,8 @@ spec:
       kind: ClusterBuildpack
       id: paketo-buildpacks/nodejs
       version: 1.2.3
+  additionalLabels:
+    custom-label: custom-value
 ```
 
 * `tag`: The tag to save the builder image. You must have access via the referenced service account.
@@ -60,6 +62,7 @@ spec:
 * `store`: If using ClusterStore, then the reference to the ClusterStore. See the [Resolving Buildpack IDs](#resolving-buildpack-ids) section below.
   * `name`: The name of the ClusterStore resource in kubernetes.
   * `kind`: The type as defined in kubernetes. This will always be ClusterStore.
+* `additionalLabels`: The custom labels that are desired to be on the Builder/ClusterBuilder images.
 
 ### <a id='cluster-builders'></a>Cluster Builders
 
@@ -161,3 +164,13 @@ version) in the following order:
    `paketo-buildpacks/gradle` is a sub-buildpack of `paketo-buildpacks/java`)
 1. As a sub-buildpack of any ClusterBuildpacks
 1. As a sub-buildpack in the ClusterStore specified in the Builder spec.
+
+### <a id='status'></a>Builder Status Conditions
+
+Builders and ClusterBuilders have two Conditions that represent the overall status of the Builder.
+
+The 'Ready' condition is used to show that the Builder is able to be used in Builds
+
+The 'UpToDate' condition indicates whether the most recent reconcile of the Builder 
+was successful. When this condition is false, that means that the Builder may not have the 
+latest Stack or Buildpacks due to ongoing reconcile failures.

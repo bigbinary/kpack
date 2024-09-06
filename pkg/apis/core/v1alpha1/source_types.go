@@ -34,8 +34,9 @@ type Source interface {
 // +k8s:openapi-gen=true
 // +k8s:deepcopy-gen=true
 type Git struct {
-	URL      string `json:"url"`
-	Revision string `json:"revision"`
+	URL                  string `json:"url"`
+	Revision             string `json:"revision"`
+	InitializeSubmodules bool   `json:"initializeSubmodules,omitempty"`
 }
 
 func (g *Git) BuildEnvVars() []corev1.EnvVar {
@@ -47,6 +48,10 @@ func (g *Git) BuildEnvVars() []corev1.EnvVar {
 		{
 			Name:  "GIT_REVISION",
 			Value: g.Revision,
+		},
+		{
+			Name:  "GIT_INITIALIZE_SUBMODULES",
+			Value: strconv.FormatBool(g.InitializeSubmodules),
 		},
 	}
 }
@@ -60,10 +65,19 @@ func (in *Git) ImagePullSecretsVolume(name string) corev1.Volume {
 	}
 }
 
+type BlobAuthKind string
+
+const (
+	BlobAuthNone   BlobAuthKind = ""
+	BlobAuthHelper BlobAuthKind = "helper"
+	BlobAuthSecret BlobAuthKind = "secret"
+)
+
 // +k8s:openapi-gen=true
 // +k8s:deepcopy-gen=true
 type Blob struct {
 	URL             string `json:"url"`
+	Auth            string `json:"auth,omitempty"`
 	StripComponents int64  `json:"stripComponents,omitempty"`
 }
 
@@ -85,6 +99,10 @@ func (b *Blob) BuildEnvVars() []corev1.EnvVar {
 		{
 			Name:  "BLOB_STRIP_COMPONENTS",
 			Value: strconv.FormatInt(b.StripComponents, 10),
+		},
+		{
+			Name:  "BLOB_AUTH",
+			Value: strconv.FormatBool(b.Auth != string(BlobAuthNone)),
 		},
 	}
 }
@@ -165,17 +183,19 @@ const (
 // +k8s:openapi-gen=true
 // +k8s:deepcopy-gen=true
 type ResolvedGitSource struct {
-	URL      string        `json:"url"`
-	Revision string        `json:"revision"`
-	SubPath  string        `json:"subPath,omitempty"`
-	Type     GitSourceKind `json:"type"`
+	URL                  string        `json:"url"`
+	Revision             string        `json:"revision"`
+	SubPath              string        `json:"subPath,omitempty"`
+	Type                 GitSourceKind `json:"type"`
+	InitializeSubmodules bool          `json:"initializeSubmodules,omitempty"`
 }
 
 func (gs *ResolvedGitSource) SourceConfig() SourceConfig {
 	return SourceConfig{
 		Git: &Git{
-			URL:      gs.URL,
-			Revision: gs.Revision,
+			URL:                  gs.URL,
+			Revision:             gs.Revision,
+			InitializeSubmodules: gs.InitializeSubmodules,
 		},
 		SubPath: gs.SubPath,
 	}
@@ -193,6 +213,7 @@ func (gs *ResolvedGitSource) IsPollable() bool {
 // +k8s:deepcopy-gen=true
 type ResolvedBlobSource struct {
 	URL             string `json:"url"`
+	Auth            string `json:"auth,omitempty"`
 	SubPath         string `json:"subPath,omitempty"`
 	StripComponents int64  `json:"stripComponents,omitempty"`
 }
@@ -201,6 +222,7 @@ func (bs *ResolvedBlobSource) SourceConfig() SourceConfig {
 	return SourceConfig{
 		Blob: &Blob{
 			URL:             bs.URL,
+			Auth:            bs.Auth,
 			StripComponents: bs.StripComponents,
 		},
 		SubPath: bs.SubPath,

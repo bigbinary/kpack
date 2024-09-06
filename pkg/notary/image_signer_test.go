@@ -2,13 +2,13 @@ package notary
 
 import (
 	"encoding/hex"
-	"io/ioutil"
+	"io"
 	"log"
 	"path/filepath"
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/buildpacks/lifecycle/platform"
+	"github.com/buildpacks/lifecycle/platform/files"
 	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
@@ -30,7 +30,7 @@ func TestImageSigner(t *testing.T) {
 
 func testImageSigner(t *testing.T, when spec.G, it spec.S) {
 	var (
-		logger = log.New(ioutil.Discard, "", 0)
+		logger = log.New(io.Discard, "", 0)
 
 		client = registryfakes.NewFakeClient()
 
@@ -139,8 +139,8 @@ func (f *FakeRepository) PublishTarget(target *notaryclient.Target) error {
 	return nil
 }
 
-func reportToml(t *testing.T, path string) platform.ExportReport {
-	var report platform.ExportReport
+func reportToml(t *testing.T, path string) files.Report {
+	var report files.Report
 	_, err := toml.DecodeFile(path, &report)
 
 	assert.Nil(t, err)

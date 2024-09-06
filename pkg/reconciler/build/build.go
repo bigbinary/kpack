@@ -3,9 +3,11 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/pkg/errors"
+	ggcrv1 "github.com/google/go-containerregistry/pkg/v1"
+	intoto "github.com/in-toto/in-toto-golang/in_toto"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -21,13 +23,17 @@ import (
 
 	buildapi "github.com/pivotal/kpack/pkg/apis/build/v1alpha2"
 	corev1alpha1 "github.com/pivotal/kpack/pkg/apis/core/v1alpha1"
+	"github.com/pivotal/kpack/pkg/buildchange"
 	"github.com/pivotal/kpack/pkg/buildpod"
 	"github.com/pivotal/kpack/pkg/client/clientset/versioned"
 	buildinformers "github.com/pivotal/kpack/pkg/client/informers/externalversions/build/v1alpha2"
 	buildlisters "github.com/pivotal/kpack/pkg/client/listers/build/v1alpha2"
 	"github.com/pivotal/kpack/pkg/cnb"
+	"github.com/pivotal/kpack/pkg/config"
 	"github.com/pivotal/kpack/pkg/reconciler"
 	"github.com/pivotal/kpack/pkg/registry"
+	"github.com/pivotal/kpack/pkg/secret"
+	"github.com/pivotal/kpack/pkg/slsa"
 )
 
 const (
@@ -46,16 +52,45 @@ type PodGenerator interface {
 	Generate(context.Context, buildpod.BuildPodable) (*corev1.Pod, error)
 }
 
-func NewController(ctx context.Context, opt reconciler.Options, k8sClient k8sclient.Interface, informer buildinformers.BuildInformer, podInformer corev1Informers.PodInformer, metadataRetriever MetadataRetriever, podGenerator PodGenerator, keychainFactory registry.KeychainFactory, injectedSidecarSupport bool) *controller.Impl {
+type PodProgressLogger interface {
+	GetTerminationMessage(pod *corev1.Pod, s *corev1.ContainerStatus) (string, error)
+}
+
+//go:generate counterfeiter . SLSAAttester
+type SLSAAttester interface {
+	AttestBuild(build *buildapi.Build, buildMetadata *cnb.BuildMetadata, pod *corev1.Pod, builderAndAppKeychain authn.Keychain, builderID slsa.BuilderID, depFns ...slsa.BuilderDependencyFn) (intoto.Statement, error)
+	Sign(ctx context.Context, stmt intoto.Statement, signers ...slsa.Signer) ([]byte, error)
+	Write(ctx context.Context, digestStr string, payload []byte, keychain authn.Keychain) (ggcrv1.Image, string, error)
+}
+
+//go:generate counterfeiter . SecretFetcher
+type SecretFetcher interface {
+	SecretsForServiceAccount(ctx context.Context, serviceAccount, namespace string) ([]*corev1.Secret, error)
+	SecretsForSystemServiceAccount(context.Context) ([]*corev1.Secret, error)
+}
+
+func NewController(
+	ctx context.Context, opt reconciler.Options, k8sClient k8sclient.Interface,
+	informer buildinformers.BuildInformer, podInformer corev1Informers.PodInformer,
+	metadataRetriever MetadataRetriever,
+	podGenerator PodGenerator, podProgressLogger *buildchange.ProgressLogger,
+	keychainFactory registry.KeychainFactory,
+	attester SLSAAttester,
+	secretFetcher SecretFetcher,
+	featureFlags config.FeatureFlags,
+) *controller.Impl {
 	c := &Reconciler{
-		Client:                 opt.Client,
-		K8sClient:              k8sClient,
-		MetadataRetriever:      metadataRetriever,
-		Lister:                 informer.Lister(),
-		PodLister:              podInformer.Lister(),
-		PodGenerator:           podGenerator,
-		KeychainFactory:        keychainFactory,
-		InjectedSidecarSupport: injectedSidecarSupport,
+		Client:            opt.Client,
+		K8sClient:         k8sClient,
+		MetadataRetriever: metadataRetriever,
+		Lister:            informer.Lister(),
+		PodLister:         podInformer.Lister(),
+		PodGenerator:      podGenerator,
+		PodProgressLogger: podProgressLogger,
+		KeychainFactory:   keychainFactory,
+		Attester:          attester,
+		SecretFetcher:     secretFetcher,
+		FeatureFlags:      featureFlags,
 	}
 
 	logger := opt.Logger.With(
@@ -75,14 +110,17 @@ func NewController(ctx context.Context, opt reconciler.Options, k8sClient k8scli
 }
 
 type Reconciler struct {
-	Client                 versioned.Interface
-	KeychainFactory        registry.KeychainFactory
-	Lister                 buildlisters.BuildLister
-	MetadataRetriever      MetadataRetriever
-	K8sClient              k8sclient.Interface
-	PodLister              v1Listers.PodLister
-	PodGenerator           PodGenerator
-	InjectedSidecarSupport bool
+	Client            versioned.Interface
+	KeychainFactory   registry.KeychainFactory
+	Lister            buildlisters.BuildLister
+	MetadataRetriever MetadataRetriever
+	K8sClient         k8sclient.Interface
+	PodLister         v1Listers.PodLister
+	PodGenerator      PodGenerator
+	PodProgressLogger PodProgressLogger
+	Attester          SLSAAttester
+	SecretFetcher     SecretFetcher
+	FeatureFlags      config.FeatureFlags
 }
 
 func (c *Reconciler) Reconcile(ctx context.Context, key string) error {
@@ -123,7 +161,7 @@ func (c *Reconciler) reconcile(ctx context.Context, build *buildapi.Build) error
 		return controller.NewPermanentError(err)
 	}
 
-	if c.InjectedSidecarSupport {
+	if c.FeatureFlags.InjectedSidecarSupport {
 		pod, err = c.setBuildReady(ctx, pod)
 		if err != nil {
 			return err
@@ -149,7 +187,7 @@ func (c *Reconciler) reconcile(ctx context.Context, build *buildapi.Build) error
 			})
 
 			if err != nil {
-				return errors.Wrap(err, "unable to create app image keychain")
+				return fmt.Errorf("unable to create app image keychain: %v", err)
 			}
 
 			buildMetadata, err = c.MetadataRetriever.GetBuildMetadata(build.Tag(), cacheTag, keychain)
@@ -159,12 +197,22 @@ func (c *Reconciler) reconcile(ctx context.Context, build *buildapi.Build) error
 		} else {
 			buildMetadata, err = c.buildMetadataFromBuildPod(pod)
 			if err != nil {
-				return errors.Wrap(err, "failed to get build metadata from build pod")
+				return fmt.Errorf("failed to get build metadata from build pod: %v", err)
 			}
 		}
+
+		var attestDigest string
+		if c.FeatureFlags.GenerateSlsaAttestation {
+			attestDigest, err = c.attestBuild(ctx, build, buildMetadata, pod)
+			if err != nil {
+				return fmt.Errorf("failed to attest build: %v", err)
+			}
+		}
+
 		build.Status.BuildMetadata = buildMetadata.BuildpackMetadata
 		build.Status.LatestImage = buildMetadata.LatestImage
 		build.Status.LatestCacheImage = buildMetadata.LatestCacheImage
+		build.Status.LatestAttestationImage = attestDigest
 		build.Status.Stack.RunImage = buildMetadata.StackRunImage
 		build.Status.Stack.ID = buildMetadata.StackID
 	}
@@ -172,7 +220,7 @@ func (c *Reconciler) reconcile(ctx context.Context, build *buildapi.Build) error
 	build.Status.PodName = pod.Name
 	build.Status.StepStates = stepStates(pod)
 	build.Status.StepsCompleted = stepsCompleted(pod)
-	build.Status.Conditions = conditionForPod(pod, build.Status.StepsCompleted)
+	build.Status.Conditions = c.conditionForPod(pod, build.Status.StepsCompleted)
 	return nil
 }
 
@@ -233,13 +281,14 @@ func (c *Reconciler) reconcileBuildPod(ctx context.Context, build *buildapi.Buil
 	return pod, nil
 }
 
-func conditionForPod(pod *corev1.Pod, stepsCompleted []string) corev1alpha1.Conditions {
+func (c *Reconciler) conditionForPod(pod *corev1.Pod, stepsCompleted []string) corev1alpha1.Conditions {
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
 		return corev1alpha1.Conditions{
 			{
 				Type:               corev1alpha1.ConditionSucceeded,
 				Status:             corev1.ConditionTrue,
+				Reason:             ReasonCompleted,
 				LastTransitionTime: corev1alpha1.VolatileTime{Inner: metav1.Now()},
 			},
 		}
@@ -249,14 +298,31 @@ func conditionForPod(pod *corev1.Pod, stepsCompleted []string) corev1alpha1.Cond
 				{
 					Type:               corev1alpha1.ConditionSucceeded,
 					Status:             corev1.ConditionTrue,
+					Reason:             ReasonCompleted,
 					LastTransitionTime: corev1alpha1.VolatileTime{Inner: metav1.Now()},
 				},
+			}
+		}
+		for _, s := range pod.Status.InitContainerStatuses {
+			if s.State.Terminated != nil && s.State.Terminated.ExitCode != 0 && s.State.Terminated.Message != "" {
+				terminationMessage, _ := c.PodProgressLogger.GetTerminationMessage(pod, &s)
+				return corev1alpha1.Conditions{
+					{
+						Type:               corev1alpha1.ConditionSucceeded,
+						Status:             corev1.ConditionFalse,
+						Reason:             string(corev1.PodFailed),
+						Message:            "Error: " + pod.Status.Message + terminationMessage,
+						LastTransitionTime: corev1alpha1.VolatileTime{Inner: metav1.Now()},
+					},
+				}
 			}
 		}
 		return corev1alpha1.Conditions{
 			{
 				Type:               corev1alpha1.ConditionSucceeded,
 				Status:             corev1.ConditionFalse,
+				Reason:             string(corev1.PodFailed),
+				Message:            pod.Status.Message,
 				LastTransitionTime: corev1alpha1.VolatileTime{Inner: metav1.Now()},
 			},
 		}
@@ -288,14 +354,10 @@ func conditionForPod(pod *corev1.Pod, stepsCompleted []string) corev1alpha1.Cond
 
 func stepStates(pod *corev1.Pod) []corev1.ContainerState {
 	states := make([]corev1.ContainerState, 0, len(buildapi.BuildSteps()))
-	for _, s := range pod.Status.InitContainerStatuses {
+	for _, s := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
 		if buildapi.IsBuildStep(s.Name) {
-			states = append(states, s.State)
-		}
-	}
-	for _, s := range pod.Status.ContainerStatuses {
-		if buildapi.IsBuildStep(s.Name) {
-			states = append(states, s.State)
+			state := createContainerStateForBuild(&s)
+			states = append(states, state)
 		}
 	}
 	return states
@@ -304,14 +366,14 @@ func stepStates(pod *corev1.Pod) []corev1.ContainerState {
 func stepsCompleted(pod *corev1.Pod) []string {
 	completed := make([]string, 0, len(buildapi.BuildSteps()))
 	for _, s := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
-		if buildStepCompleted(s) {
+		if buildStepCompleted(&s) {
 			completed = append(completed, s.Name)
 		}
 	}
 	return completed
 }
 
-func buildStepCompleted(s corev1.ContainerStatus) bool {
+func buildStepCompleted(s *corev1.ContainerStatus) bool {
 	return s.State.Terminated != nil && s.State.Terminated.ExitCode == 0 && buildapi.IsBuildStep(s.Name)
 }
 
@@ -336,7 +398,106 @@ func (c *Reconciler) buildMetadataFromBuildPod(pod *corev1.Pod) (*cnb.BuildMetad
 			return cnb.DecompressBuildMetadata(status.State.Terminated.Message)
 		}
 	}
-	return nil, errors.New(buildapi.CompletionContainerName + " container not found")
+	return nil, fmt.Errorf("%v container not found", buildapi.CompletionContainerName)
+}
+
+func (c *Reconciler) attestBuild(ctx context.Context, build *buildapi.Build, buildMetadata *cnb.BuildMetadata, pod *corev1.Pod) (string, error) {
+	keychain, err := c.KeychainFactory.KeychainForSecretRef(ctx, registry.SecretRef{
+		ServiceAccount:   build.Spec.ServiceAccountName,
+		Namespace:        build.Namespace,
+		ImagePullSecrets: build.Spec.Builder.ImagePullSecrets,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	controllerSecrets, err := c.SecretFetcher.SecretsForSystemServiceAccount(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get controller secrets: %v", err)
+	}
+
+	buildSecrets, err := c.SecretFetcher.SecretsForServiceAccount(ctx, build.ServiceAccount(), build.Namespace)
+	if err != nil {
+		return "", fmt.Errorf("failed to get service account secrets: %v", err)
+	}
+
+	secrets := append(controllerSecrets, buildSecrets...)
+	signingKeys, err := secret.FilterAndExtractSLSASecrets(secrets)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse slsa secrets: %v", err)
+	}
+
+	signers := make([]slsa.Signer, len(signingKeys))
+	for i, key := range signingKeys {
+		var s slsa.Signer
+		switch key.Type {
+		case secret.CosignKeyType:
+			s, err = slsa.NewCosignSigner(key.Key, key.Password, key.SecretName)
+		case secret.PKCS8KeyType:
+			s, err = slsa.NewPKCS8Signer(key.Key, key.SecretName)
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to create signer: %v", err)
+		}
+		signers[i] = s
+	}
+
+	buildId := slsa.UnsignedBuildID
+	if len(signers) > 0 {
+		buildId = slsa.SignedBuildID
+	}
+
+	deps, err := c.attestBuildDeps(ctx, build, pod, secrets)
+	if err != nil {
+		return "", fmt.Errorf("failed to gather build deps: %v", err)
+	}
+
+	statement, err := c.Attester.AttestBuild(build, buildMetadata, pod, keychain, buildId, deps...)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate statement: %v", err)
+	}
+
+	payload, err := c.Attester.Sign(ctx, statement, signers...)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign statement: %v", err)
+	}
+
+	_, digest, err := c.Attester.Write(ctx, buildMetadata.LatestImage, payload, keychain)
+	if err != nil {
+		return "", fmt.Errorf("failed to write attestation: %v", err)
+	}
+
+	return digest, nil
+}
+
+func (c *Reconciler) attestBuildDeps(ctx context.Context, build *buildapi.Build, pod *corev1.Pod, secrets []*corev1.Secret) ([]slsa.BuilderDependencyFn, error) {
+	ns, err := c.K8sClient.CoreV1().Namespaces().Get(ctx, build.Namespace, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	sa, err := c.K8sClient.CoreV1().ServiceAccounts(build.Namespace).Get(ctx, build.ServiceAccount(), metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	deps := []slsa.BuilderDependencyFn{
+		slsa.WithVersionedObject("Namespace", ns),
+		slsa.WithVersionedObject("Build", build),
+		slsa.WithVersionedObject("Pod", pod),
+		slsa.WithVersionedObject("ServiceAccount", sa),
+	}
+
+	attestSecrets := make([]slsa.K8sObject, len(secrets))
+	for i, v := range secrets {
+		attestSecrets[i] = slsa.K8sObject(v)
+	}
+
+	if len(attestSecrets) != 0 {
+		deps = append(deps, slsa.WithVersionedObjects("Secrets", attestSecrets))
+	}
+
+	return deps, nil
 }
 
 func contains(arr []string, s string) bool {
@@ -367,4 +528,23 @@ func allContainersReady(pod *corev1.Pod) bool {
 	}
 
 	return ready == len(pod.Spec.Containers)
+}
+
+func createContainerStateForBuild(s *corev1.ContainerStatus) corev1.ContainerState {
+	switch {
+	case s.State.Terminated != nil:
+		if s.State.Terminated.Message == "" {
+			successStatus := "successfully"
+			if s.State.Terminated.ExitCode != 0 {
+				successStatus = "with error"
+			}
+			s.State.Terminated.Message = "Container " + s.Name + " terminated " + successStatus
+		}
+	case s.State.Waiting != nil:
+		if s.State.Waiting.Message == "" {
+			s.State.Waiting.Message = "Container " + s.Name + " waiting"
+		}
+	default:
+	}
+	return s.State
 }

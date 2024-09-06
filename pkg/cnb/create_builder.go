@@ -2,12 +2,15 @@ package cnb
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	ggcrv1 "github.com/google/go-containerregistry/pkg/v1"
+	corev1 "k8s.io/api/core/v1"
 
 	buildapi "github.com/pivotal/kpack/pkg/apis/build/v1alpha2"
 	corev1alpha1 "github.com/pivotal/kpack/pkg/apis/core/v1alpha1"
+	"github.com/pivotal/kpack/pkg/cosign"
 	"github.com/pivotal/kpack/pkg/registry"
 )
 
@@ -25,15 +28,36 @@ type RemoteBuilderCreator struct {
 	LifecycleProvider LifecycleProvider
 	KpackVersion      string
 	KeychainFactory   registry.KeychainFactory
+	ImageSigner       cosign.BuilderSigner
 }
 
-func (r *RemoteBuilderCreator) CreateBuilder(ctx context.Context, builderKeychain authn.Keychain, stackKeychain authn.Keychain, fetcher RemoteBuildpackFetcher, clusterStack *buildapi.ClusterStack, spec buildapi.BuilderSpec) (buildapi.BuilderRecord, error) {
+func (r *RemoteBuilderCreator) CreateBuilder(
+	ctx context.Context,
+	builderKeychain authn.Keychain,
+	stackKeychain authn.Keychain,
+	fetcher RemoteBuildpackFetcher,
+	clusterStack *buildapi.ClusterStack,
+	spec buildapi.BuilderSpec,
+	serviceAccountSecrets []*corev1.Secret,
+	resolvedBuilderRef string,
+) (buildapi.BuilderRecord, error) {
+
 	buildImage, _, err := r.RegistryClient.Fetch(stackKeychain, clusterStack.Status.BuildImage.LatestImage)
+	if err != nil {
+		return buildapi.BuilderRecord{}, err
+	}
+	runImage, _, err := r.RegistryClient.Fetch(stackKeychain, clusterStack.Status.RunImage.LatestImage)
 	if err != nil {
 		return buildapi.BuilderRecord{}, err
 	}
 
 	builderBldr := newBuilderBldr(r.KpackVersion)
+
+	relocatedRunImage, err := r.RegistryClient.Save(builderKeychain, fmt.Sprintf("%s-run-image", resolvedBuilderRef), runImage)
+	if err != nil {
+		return buildapi.BuilderRecord{}, err
+	}
+	builderBldr.AddRunImage(relocatedRunImage)
 
 	err = builderBldr.AddStack(buildImage, clusterStack)
 	if err != nil {
@@ -61,12 +85,14 @@ func (r *RemoteBuilderCreator) CreateBuilder(ctx context.Context, builderKeychai
 		builderBldr.AddGroup(buildpacks...)
 	}
 
+	builderBldr.AddAdditionalLabels(spec.AdditionalLabels)
+
 	writeableImage, err := builderBldr.WriteableImage()
 	if err != nil {
 		return buildapi.BuilderRecord{}, err
 	}
 
-	identifier, err := r.RegistryClient.Save(builderKeychain, spec.Tag, writeableImage)
+	identifier, err := r.RegistryClient.Save(builderKeychain, resolvedBuilderRef, writeableImage)
 	if err != nil {
 		return buildapi.BuilderRecord{}, err
 	}
@@ -76,10 +102,21 @@ func (r *RemoteBuilderCreator) CreateBuilder(ctx context.Context, builderKeychai
 		return buildapi.BuilderRecord{}, err
 	}
 
+	var (
+		signaturePaths = make([]buildapi.CosignSignature, 0)
+	)
+
+	if len(serviceAccountSecrets) > 0 {
+		signaturePaths, err = r.ImageSigner.SignBuilder(ctx, identifier, serviceAccountSecrets, builderKeychain)
+		if err != nil {
+			return buildapi.BuilderRecord{}, err
+		}
+	}
+
 	builder := buildapi.BuilderRecord{
 		Image: identifier,
 		Stack: corev1alpha1.BuildStack{
-			RunImage: clusterStack.Status.RunImage.LatestImage,
+			RunImage: relocatedRunImage,
 			ID:       clusterStack.Status.Id,
 		},
 		Buildpacks:              buildpackMetadata(builderBldr.buildpacks()),
@@ -87,6 +124,7 @@ func (r *RemoteBuilderCreator) CreateBuilder(ctx context.Context, builderKeychai
 		ObservedStackGeneration: clusterStack.Status.ObservedGeneration,
 		ObservedStoreGeneration: fetcher.ClusterStoreObservedGeneration(),
 		OS:                      config.OS,
+		SignaturePaths:          signaturePaths,
 	}
 
 	return builder, nil

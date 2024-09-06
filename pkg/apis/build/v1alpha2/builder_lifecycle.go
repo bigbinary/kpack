@@ -16,6 +16,7 @@ type BuilderRecord struct {
 	ObservedStoreGeneration int64
 	ObservedStackGeneration int64
 	OS                      string
+	SignaturePaths          []CosignSignature
 }
 
 func (bs *BuilderStatus) BuilderRecord(record BuilderRecord) {
@@ -28,20 +29,40 @@ func (bs *BuilderStatus) BuilderRecord(record BuilderRecord) {
 			Type:               corev1alpha1.ConditionReady,
 			Status:             corev1.ConditionTrue,
 		},
+		{
+			Type:               ConditionUpToDate,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: corev1alpha1.VolatileTime{Inner: v1.Now()},
+		},
 	}
 	bs.Order = record.Order
 	bs.ObservedStoreGeneration = record.ObservedStoreGeneration
 	bs.ObservedStackGeneration = record.ObservedStackGeneration
 	bs.OS = record.OS
+	bs.SignaturePaths = record.SignaturePaths
 }
 
-func (cb *BuilderStatus) ErrorCreate(err error) {
-	cb.Status = corev1alpha1.Status{
+func (bs *BuilderStatus) ErrorCreate(err error) {
+
+	readyCondition := corev1alpha1.Condition{
+		LastTransitionTime: corev1alpha1.VolatileTime{Inner: v1.Now()},
+		Type:               corev1alpha1.ConditionReady,
+		Status:             corev1.ConditionTrue,
+	}
+	if bs.LatestImage == "" {
+		readyCondition.Status = corev1.ConditionFalse
+		readyCondition.Message = NoLatestImageMessage
+		readyCondition.Reason = NoLatestImageReason
+	}
+
+	bs.Status = corev1alpha1.Status{
 		Conditions: corev1alpha1.Conditions{
+			readyCondition,
 			{
-				Type:               corev1alpha1.ConditionReady,
+				Type:               ConditionUpToDate,
 				Status:             corev1.ConditionFalse,
 				LastTransitionTime: corev1alpha1.VolatileTime{Inner: v1.Now()},
+				Reason:             ReconcileFailedReason,
 				Message:            err.Error(),
 			},
 		},

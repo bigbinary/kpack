@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/pivotal/kpack/pkg/secret/secretfakes"
+
 	"github.com/sclevine/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,17 +35,21 @@ func TestClusterBuilderReconciler(t *testing.T) {
 
 func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 	const (
-		builderName             = "custom-builder"
-		builderKey              = builderName
-		builderTag              = "example.com/custom-builder"
-		builderIdentifier       = "example.com/custom-builder@sha256:resolved-builder-digest"
-		initialGeneration int64 = 1
+		builderName               = "custom-builder"
+		builderKey                = builderName
+		builderTag                = "example.com/custom-builder"
+		expectedResolvedTag       = "example.com/custom-builder:clusterbuilder-custom-builder"
+		builderIdentifier         = "example.com/custom-builder@sha256:resolved-builder-digest"
+		initialGeneration   int64 = 1
 	)
 
 	var (
-		builderCreator  = &testhelpers.FakeBuilderCreator{}
-		keychainFactory = &registryfakes.FakeKeychainFactory{}
-		fakeTracker     = &testhelpers.FakeTracker{}
+		builderCreator    = &testhelpers.FakeBuilderCreator{}
+		keychainFactory   = &registryfakes.FakeKeychainFactory{}
+		fakeTracker       = &testhelpers.FakeTracker{}
+		fakeSecretFetcher = &secretfakes.FakeFetchSecret{
+			FakeSecrets: []*corev1.Secret{},
+		}
 	)
 
 	rt := testhelpers.ReconcilerTester(t,
@@ -59,9 +65,29 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 				ClusterStoreLister:     listers.GetClusterStoreLister(),
 				ClusterBuildpackLister: listers.GetClusterBuildpackLister(),
 				ClusterStackLister:     listers.GetClusterStackLister(),
+				SecretFetcher:          fakeSecretFetcher,
 			}
 			return &kreconciler.NetworkErrorReconciler{Reconciler: r}, rtesting.ActionRecorderList{fakeClient}, rtesting.EventList{Recorder: record.NewFakeRecorder(10)}
 		})
+
+	signingSecret := corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "some-secret-name",
+			Namespace: "some-sa-namespace",
+		},
+	}
+
+	serviceAccount := corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "some-sa-name",
+			Namespace: signingSecret.Namespace,
+		},
+		Secrets: []corev1.ObjectReference{
+			{
+				Name: signingSecret.Name,
+			},
+		},
+	}
 
 	clusterStore := &buildapi.ClusterStore{
 		ObjectMeta: metav1.ObjectMeta{
@@ -111,7 +137,6 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 			APIVersion: "kpack.io/v1alpha2",
 		},
 	}
-
 	builder := &buildapi.ClusterBuilder{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       builderName,
@@ -208,6 +233,10 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 								Type:   corev1alpha1.ConditionReady,
 								Status: corev1.ConditionTrue,
 							},
+							{
+								Type:   buildapi.ConditionUpToDate,
+								Status: corev1.ConditionTrue,
+							},
 						},
 					},
 					BuilderMetadata: []corev1alpha1.BuildpackMetadata{
@@ -239,6 +268,8 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 					clusterStore,
 					builder,
 					clusterBuildpack,
+					&signingSecret,
+					&serviceAccount,
 				},
 				WantErr: false,
 				WantStatusUpdates: []clientgotesting.UpdateActionImpl{
@@ -249,12 +280,14 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 			})
 
 			assert.Equal(t, []testhelpers.CreateBuilderArgs{{
-				Context:         context.Background(),
-				BuilderKeychain: &registryfakes.FakeKeychain{},
-				StackKeychain:   &registryfakes.FakeKeychain{},
-				Fetcher:         expectedFetcher,
-				ClusterStack:    clusterStack,
-				BuilderSpec:     builder.Spec.BuilderSpec,
+				Context:            context.Background(),
+				BuilderKeychain:    &registryfakes.FakeKeychain{},
+				StackKeychain:      &registryfakes.FakeKeychain{},
+				Fetcher:            expectedFetcher,
+				ClusterStack:       clusterStack,
+				BuilderSpec:        builder.Spec.BuilderSpec,
+				SigningSecrets:     []*corev1.Secret{},
+				ResolvedBuilderTag: expectedResolvedTag,
 			}}, builderCreator.CreateBuilderCalls)
 		})
 
@@ -280,6 +313,10 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 								Type:   corev1alpha1.ConditionReady,
 								Status: corev1.ConditionTrue,
 							},
+							{
+								Type:   buildapi.ConditionUpToDate,
+								Status: corev1.ConditionTrue,
+							},
 						},
 					},
 					BuilderMetadata: []corev1alpha1.BuildpackMetadata{},
@@ -297,6 +334,8 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 					clusterStack,
 					clusterStore,
 					expectedBuilder,
+					&signingSecret,
+					&serviceAccount,
 				},
 				WantErr: false,
 			})
@@ -333,6 +372,10 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 							Type:   corev1alpha1.ConditionReady,
 							Status: corev1.ConditionTrue,
 						},
+						{
+							Type:   buildapi.ConditionUpToDate,
+							Status: corev1.ConditionTrue,
+						},
 					},
 				},
 				BuilderMetadata: []corev1alpha1.BuildpackMetadata{
@@ -354,6 +397,8 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 					clusterStack,
 					clusterStore,
 					builder,
+					&signingSecret,
+					&serviceAccount,
 				},
 				WantErr: false,
 			})
@@ -373,7 +418,14 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 							{
 								Type:    corev1alpha1.ConditionReady,
 								Status:  corev1.ConditionFalse,
+								Message: buildapi.NoLatestImageMessage,
+								Reason:  buildapi.NoLatestImageReason,
+							},
+							{
+								Type:    buildapi.ConditionUpToDate,
+								Status:  corev1.ConditionFalse,
 								Message: "create error",
+								Reason:  buildapi.ReconcileFailedReason,
 							},
 						},
 					},
@@ -386,6 +438,8 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 					clusterStack,
 					clusterStore,
 					builder,
+					&signingSecret,
+					&serviceAccount,
 				},
 				WantErr: true,
 				WantStatusUpdates: []clientgotesting.UpdateActionImpl{
@@ -438,7 +492,14 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 										{
 											Type:    corev1alpha1.ConditionReady,
 											Status:  corev1.ConditionFalse,
+											Message: buildapi.NoLatestImageMessage,
+											Reason:  buildapi.NoLatestImageReason,
+										},
+										{
+											Type:    buildapi.ConditionUpToDate,
+											Status:  corev1.ConditionFalse,
 											Message: "stack some-stack is not ready",
+											Reason:  buildapi.ReconcileFailedReason,
 										},
 									},
 								},
@@ -476,6 +537,13 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 										{
 											Type:    corev1alpha1.ConditionReady,
 											Status:  corev1.ConditionFalse,
+											Message: buildapi.NoLatestImageMessage,
+											Reason:  buildapi.NoLatestImageReason,
+										},
+										{
+											Type:    buildapi.ConditionUpToDate,
+											Status:  corev1.ConditionFalse,
+											Reason:  buildapi.ReconcileFailedReason,
 											Message: `clusterstore.kpack.io "some-store" not found`,
 										},
 									},
@@ -514,6 +582,13 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 										{
 											Type:    corev1alpha1.ConditionReady,
 											Status:  corev1.ConditionFalse,
+											Message: buildapi.NoLatestImageMessage,
+											Reason:  buildapi.NoLatestImageReason,
+										},
+										{
+											Type:    buildapi.ConditionUpToDate,
+											Status:  corev1.ConditionFalse,
+											Reason:  buildapi.ReconcileFailedReason,
 											Message: `clusterstack.kpack.io "some-stack" not found`,
 										},
 									},
@@ -529,6 +604,134 @@ func testClusterBuilderReconciler(t *testing.T, when spec.G, it spec.S) {
 				kreconciler.KeyForObject(clusterStack),
 				builder.NamespacedName()))
 			require.Len(t, builderCreator.CreateBuilderCalls, 0)
+		})
+
+		it("adds a tag when one doesn't exist", func() {
+			rt.Test(rtesting.TableRow{
+				Key: builderKey,
+				Objects: []runtime.Object{
+					clusterStack,
+					clusterStore,
+					builder,
+					clusterBuildpack,
+					&signingSecret,
+					&serviceAccount,
+				},
+				WantErr: false,
+				WantStatusUpdates: []clientgotesting.UpdateActionImpl{
+					{
+						Object: &buildapi.ClusterBuilder{
+							ObjectMeta: builder.ObjectMeta,
+							Spec:       builder.Spec,
+							TypeMeta:   builder.TypeMeta,
+							Status: buildapi.BuilderStatus{
+								Status: corev1alpha1.Status{
+									ObservedGeneration: 1,
+									Conditions: corev1alpha1.Conditions{
+										{
+											Type:   corev1alpha1.ConditionReady,
+											Status: corev1.ConditionTrue,
+										},
+										{
+											Type:   buildapi.ConditionUpToDate,
+											Status: corev1.ConditionTrue,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+
+			assert.Equal(t, expectedResolvedTag, builderCreator.CreateBuilderCalls[0].ResolvedBuilderTag)
+		})
+
+		it("uses existing tag if provided", func() {
+
+			builder.Spec.Tag = "example.com/custom-builder:my-tag"
+			rt.Test(rtesting.TableRow{
+				Key: builderKey,
+				Objects: []runtime.Object{
+					clusterStack,
+					clusterStore,
+					builder,
+					clusterBuildpack,
+					&signingSecret,
+					&serviceAccount,
+				},
+				WantErr: false,
+				WantStatusUpdates: []clientgotesting.UpdateActionImpl{
+					{
+						Object: &buildapi.ClusterBuilder{
+							ObjectMeta: builder.ObjectMeta,
+							Spec:       builder.Spec,
+							TypeMeta:   builder.TypeMeta,
+							Status: buildapi.BuilderStatus{
+								Status: corev1alpha1.Status{
+									ObservedGeneration: 1,
+									Conditions: corev1alpha1.Conditions{
+										{
+											Type:   corev1alpha1.ConditionReady,
+											Status: corev1.ConditionTrue,
+										},
+										{
+											Type:   buildapi.ConditionUpToDate,
+											Status: corev1.ConditionTrue,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+
+			assert.Equal(t, "example.com/custom-builder:my-tag", builderCreator.CreateBuilderCalls[0].ResolvedBuilderTag)
+		})
+
+		it("fails if spec.tag is not a valid image ref", func() {
+			builder.Spec.Tag = "example.com/invalid::builder"
+			rt.Test(rtesting.TableRow{
+				Key: builderKey,
+				Objects: []runtime.Object{
+					clusterStack,
+					clusterStore,
+					builder,
+					clusterBuildpack,
+					&signingSecret,
+					&serviceAccount,
+				},
+				WantErr: true,
+				WantStatusUpdates: []clientgotesting.UpdateActionImpl{
+					{
+						Object: &buildapi.ClusterBuilder{
+							ObjectMeta: builder.ObjectMeta,
+							Spec:       builder.Spec,
+							TypeMeta:   builder.TypeMeta,
+							Status: buildapi.BuilderStatus{
+								Status: corev1alpha1.Status{
+									ObservedGeneration: 1,
+									Conditions: corev1alpha1.Conditions{
+										{
+											Type:    corev1alpha1.ConditionReady,
+											Status:  corev1.ConditionFalse,
+											Reason:  buildapi.NoLatestImageReason,
+											Message: buildapi.NoLatestImageMessage,
+										},
+										{
+											Type:    buildapi.ConditionUpToDate,
+											Status:  corev1.ConditionFalse,
+											Reason:  buildapi.ReconcileFailedReason,
+											Message: "could not parse reference: example.com/invalid::builder",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
 		})
 	})
 }

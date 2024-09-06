@@ -10,8 +10,12 @@ import (
 )
 
 const (
-	BuilderKind   = "Builder"
-	BuilderCRName = "builders.kpack.io"
+	BuilderKind                                      = "Builder"
+	BuilderCRName                                    = "builders.kpack.io"
+	ConditionUpToDate     corev1alpha1.ConditionType = "UpToDate"
+	NoLatestImageReason   string                     = "NoLatestImage"
+	NoLatestImageMessage  string                     = "Builder has no latestImage"
+	ReconcileFailedReason string                     = "ReconcileFailed"
 )
 
 // +genclient
@@ -32,7 +36,8 @@ type BuilderSpec struct {
 	Stack corev1.ObjectReference `json:"stack,omitempty"`
 	Store corev1.ObjectReference `json:"store,omitempty"`
 	// +listType
-	Order []BuilderOrderEntry `json:"order,omitempty"`
+	Order            []BuilderOrderEntry `json:"order,omitempty"`
+	AdditionalLabels map[string]string   `json:"additionalLabels,omitempty"`
 }
 
 // +k8s:openapi-gen=true
@@ -56,6 +61,12 @@ type NamespacedBuilderSpec struct {
 }
 
 // +k8s:openapi-gen=true
+type CosignSignature struct {
+	SigningSecret string `json:"signingSecret"`
+	TargetDigest  string `json:"targetDigest"`
+}
+
+// +k8s:openapi-gen=true
 type BuilderStatus struct {
 	corev1alpha1.Status     `json:",inline"`
 	BuilderMetadata         corev1alpha1.BuildpackMetadataList `json:"builderMetadata,omitempty"`
@@ -65,6 +76,7 @@ type BuilderStatus struct {
 	ObservedStackGeneration int64                              `json:"observedStackGeneration,omitempty"`
 	ObservedStoreGeneration int64                              `json:"observedStoreGeneration,omitempty"`
 	OS                      string                             `json:"os,omitempty"`
+	SignaturePaths          []CosignSignature                  `json:"signaturePaths,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

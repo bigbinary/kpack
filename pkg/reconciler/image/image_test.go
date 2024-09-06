@@ -75,7 +75,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 			return r, actionRecorderList, eventList
 		})
 
-	imageWithBuilder := &buildapi.Image{
+imageWithBuilder := &buildapi.Image{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       imageName,
 			Namespace:  namespace,
@@ -172,6 +172,10 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 						Type:   corev1alpha1.ConditionReady,
 						Status: corev1.ConditionTrue,
 					},
+					{
+						Type:   buildapi.ConditionUpToDate,
+						Status: corev1.ConditionTrue,
+					},
 				},
 			},
 		},
@@ -206,6 +210,10 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 				Conditions: corev1alpha1.Conditions{
 					{
 						Type:   corev1alpha1.ConditionReady,
+						Status: corev1.ConditionTrue,
+					},
+					{
+						Type:   buildapi.ConditionUpToDate,
 						Status: corev1.ConditionTrue,
 					},
 				},
@@ -311,7 +319,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 											Type:    corev1alpha1.ConditionReady,
 											Status:  corev1.ConditionFalse,
 											Reason:  "BuilderNotFound",
-											Message: "Unable to find builder builder-name.",
+											Message: "Error: Unable to find builder 'builder-name' in namespace ''.",
 										},
 									},
 								},
@@ -490,7 +498,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 							},
 							Spec: corev1.PersistentVolumeClaimSpec{
 								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-								Resources: corev1.ResourceRequirements{
+								Resources: corev1.VolumeResourceRequirements{
 									Requests: corev1.ResourceList{
 										corev1.ResourceStorage: cacheSize,
 									},
@@ -539,7 +547,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 							},
 							Spec: corev1.PersistentVolumeClaimSpec{
 								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-								Resources: corev1.ResourceRequirements{
+								Resources: corev1.VolumeResourceRequirements{
 									Requests: corev1.ResourceList{
 										corev1.ResourceStorage: cacheSize,
 									},
@@ -576,7 +584,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 							},
 							Spec: corev1.PersistentVolumeClaimSpec{
 								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-								Resources: corev1.ResourceRequirements{
+								Resources: corev1.VolumeResourceRequirements{
 									Requests: corev1.ResourceList{
 										corev1.ResourceStorage: cacheSize,
 									},
@@ -600,7 +608,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 								},
 								Spec: corev1.PersistentVolumeClaimSpec{
 									AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-									Resources: corev1.ResourceRequirements{
+									Resources: corev1.VolumeResourceRequirements{
 										Requests: corev1.ResourceList{
 											corev1.ResourceStorage: newCacheSize,
 										},
@@ -645,7 +653,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 								},
 								Spec: corev1.PersistentVolumeClaimSpec{
 									AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-									Resources: corev1.ResourceRequirements{
+									Resources: corev1.VolumeResourceRequirements{
 										Requests: corev1.ResourceList{
 											corev1.ResourceStorage: cacheSize,
 										},
@@ -727,7 +735,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 							},
 							Spec: corev1.PersistentVolumeClaimSpec{
 								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-								Resources: corev1.ResourceRequirements{
+								Resources: corev1.VolumeResourceRequirements{
 									Requests: corev1.ResourceList{
 										corev1.ResourceStorage: cacheSize,
 									},
@@ -769,7 +777,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 					WantCreates: nil,
 				})
 
-				assert.Equal(t, "SourceResolver image-name-source is not ready", imageWithBuilder.Status.GetCondition(corev1alpha1.ConditionReady).Message)
+				assert.Equal(t, "Error: SourceResolver 'image-name-source' is not ready", imageWithBuilder.Status.GetCondition(corev1alpha1.ConditionReady).Message)
 			})
 
 			it("does not schedule a build if the builder is not ready", func() {
@@ -778,11 +786,18 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 					Key: key,
 					Objects: []runtime.Object{
 						imageWithBuilder,
-						builderWithCondition(builder, corev1alpha1.Condition{
-							Type:    corev1alpha1.ConditionReady,
-							Status:  corev1.ConditionFalse,
-							Message: "something went wrong",
-						}),
+						builderWithCondition(
+							builder, 
+							corev1alpha1.Condition{
+								Type:    corev1alpha1.ConditionReady,
+								Status:  corev1.ConditionFalse,
+								Message: "something went wrong",
+							},
+							corev1alpha1.Condition{
+								Type:    buildapi.ConditionUpToDate,
+								Status:  corev1.ConditionFalse,
+							},
+						),
 						resolvedSourceResolver(imageWithBuilder),
 					},
 					WantErr: false,
@@ -799,13 +814,136 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 												Type:    corev1alpha1.ConditionReady,
 												Status:  corev1.ConditionFalse,
 												Reason:  buildapi.BuilderNotReady,
-												Message: "Builder builder-name is not ready: something went wrong",
+												Message: "Error: Builder 'builder-name' is not ready in namespace 'some-namespace'; Message: something went wrong",
 											},
 											{
 												Type:    buildapi.ConditionBuilderReady,
 												Status:  corev1.ConditionFalse,
 												Reason:  buildapi.BuilderNotReady,
-												Message: "Builder builder-name is not ready: something went wrong",
+												Message: "Error: Builder 'builder-name' is not ready in namespace 'some-namespace'; Message: something went wrong",
+											},
+											{
+												Type:    buildapi.ConditionBuilderUpToDate,
+												Status:  corev1.ConditionFalse,
+												Reason:  buildapi.BuilderNotUpToDate,
+												Message: "Builder is not up to date. The latest stack and buildpacks may not be in use.",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				})
+			})
+
+			it("includes builder UpToDate condition in status", func() {
+				sourceResolver := resolvedSourceResolver(imageWithBuilder)
+				rt.Test(rtesting.TableRow{
+					Key: key,
+					Objects: []runtime.Object{
+						imageWithBuilder,
+						builderWithCondition(
+							builder, 
+							corev1alpha1.Condition{
+								Type:    corev1alpha1.ConditionReady,
+								Status:  corev1.ConditionTrue,
+							},
+							corev1alpha1.Condition{
+								Type:    buildapi.ConditionUpToDate,
+								Status:  corev1.ConditionFalse,
+								Message: "Builder failed to reconcile",
+								Reason: buildapi.ReconcileFailedReason,
+							},
+						),
+						sourceResolver,
+					},
+					WantErr: false,
+					WantCreates: []runtime.Object{
+						&buildapi.Build{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      imageName + "-build-1",
+								Namespace: namespace,
+								OwnerReferences: []metav1.OwnerReference{
+									*kmeta.NewControllerRef(imageWithBuilder),
+								},
+								Labels: map[string]string{
+									buildapi.BuildNumberLabel:     "1",
+									buildapi.ImageLabel:           imageName,
+									buildapi.ImageGenerationLabel: generation(imageWithBuilder),
+									someLabelKey:                  someValueToPassThrough,
+								},
+								Annotations: map[string]string{
+									buildapi.BuilderNameAnnotation: builderName,
+									buildapi.BuilderKindAnnotation: buildapi.BuilderKind,
+									buildapi.BuildReasonAnnotation: buildapi.BuildReasonConfig,
+									buildapi.BuildChangesAnnotation: testhelpers.CompactJSON(`
+[
+  {
+    "reason": "CONFIG",
+    "old": {
+      "resources": {},
+      "source": {}
+    },
+    "new": {
+      "resources": {},
+      "source": {
+        "git": {
+          "url": "https://some.git/url-resolved",
+          "revision": "1234567-resolved"
+        }
+      }
+    }
+  }
+]`),
+								},
+							},
+							Spec: buildapi.BuildSpec{
+								Tags: []string{imageWithBuilder.Spec.Tag},
+								Builder: corev1alpha1.BuildBuilderSpec{
+									Image: builder.Status.LatestImage,
+								},
+								ServiceAccountName: imageWithBuilder.Spec.ServiceAccountName,
+								Cache:              &buildapi.BuildCacheConfig{},
+								RunImage:           builderRunImage,
+								Source: corev1alpha1.SourceConfig{
+									Git: &corev1alpha1.Git{
+										URL:      sourceResolver.Status.Source.Git.URL,
+										Revision: sourceResolver.Status.Source.Git.Revision,
+									},
+								},
+							},
+						},
+					},
+					WantStatusUpdates: []clientgotesting.UpdateActionImpl{
+						{
+							Object: &buildapi.Image{
+								ObjectMeta: imageWithBuilder.ObjectMeta,
+								Spec:       imageWithBuilder.Spec,
+								Status: buildapi.ImageStatus{
+									LatestBuildRef: "image-name-build-1",
+									LatestBuildImageGeneration: 1,
+									BuildCounter: 1,
+									LatestBuildReason: "CONFIG",
+									Status: corev1alpha1.Status{
+										ObservedGeneration: originalGeneration,
+										Conditions: corev1alpha1.Conditions{
+											{
+												Type:    corev1alpha1.ConditionReady,
+												Status:  corev1.ConditionUnknown,
+												Reason:  image.BuildRunningReason,
+												Message: "Build 'image-name-build-1' is executing",
+											},
+											{
+												Type:    buildapi.ConditionBuilderReady,
+												Status:  corev1.ConditionTrue,
+												Reason:  buildapi.BuilderReady,
+											},
+											{
+												Type:    buildapi.ConditionBuilderUpToDate,
+												Status:  corev1.ConditionFalse,
+												Reason:  buildapi.BuilderNotUpToDate,
+												Message: "Builder is not up to date. The latest stack and buildpacks may not be in use.",
 											},
 										},
 									},
@@ -1587,6 +1725,10 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 											Type:   corev1alpha1.ConditionReady,
 											Status: corev1.ConditionTrue,
 										},
+										{
+											Type:   buildapi.ConditionUpToDate,
+											Status: corev1.ConditionTrue,
+										},
 									},
 								},
 								LatestImage: updatedBuilderImage,
@@ -1755,6 +1897,10 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 									Conditions: corev1alpha1.Conditions{
 										{
 											Type:   corev1alpha1.ConditionReady,
+											Status: corev1.ConditionTrue,
+										},
+										{
+											Type:   buildapi.ConditionUpToDate,
 											Status: corev1.ConditionTrue,
 										},
 									},
@@ -2110,6 +2256,11 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 												Status: corev1.ConditionTrue,
 												Reason: buildapi.BuilderReady,
 											},
+											{
+												Type:   buildapi.ConditionBuilderUpToDate,
+												Status: corev1.ConditionTrue,
+												Reason: buildapi.BuilderUpToDate,
+											},
 										},
 									},
 									LatestBuildRef: "image-name-build-1",
@@ -2222,6 +2373,11 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 												Status: corev1.ConditionTrue,
 												Reason: buildapi.BuilderReady,
 											},
+											{
+												Type:   buildapi.ConditionBuilderUpToDate,
+												Status: corev1.ConditionTrue,
+												Reason: buildapi.BuilderUpToDate,
+											},
 										},
 									},
 									LatestBuildRef: "image-name-build-1",
@@ -2301,13 +2457,19 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 												Type:    corev1alpha1.ConditionReady,
 												Status:  corev1.ConditionFalse,
 												Reason:  buildapi.BuilderNotReady,
-												Message: "Builder builder-name is not ready",
+												Message: "Error: Builder 'builder-name' is not ready in namespace 'some-namespace'",
 											},
 											{
 												Type:    buildapi.ConditionBuilderReady,
 												Status:  corev1.ConditionFalse,
 												Reason:  buildapi.BuilderNotReady,
-												Message: "Builder builder-name is not ready",
+												Message: "Error: Builder 'builder-name' is not ready in namespace 'some-namespace'",
+											},
+											{
+												Type:    buildapi.ConditionBuilderUpToDate,
+												Status:  corev1.ConditionFalse,
+												Reason:  buildapi.BuilderNotUpToDate,
+												Message: "Builder is not up to date. The latest stack and buildpacks may not be in use.",
 											},
 										},
 									},
@@ -2387,12 +2549,17 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 												Type:    corev1alpha1.ConditionReady,
 												Status:  corev1.ConditionFalse,
 												Reason:  image.BuildFailedReason,
-												Message: fmt.Sprintf("Build %s failed: %s", failedBuild.Name, failureMessage),
+												Message: fmt.Sprintf("Error: Build '%s' in namespace '%s' failed: %s", failedBuild.Name, failedBuild.Namespace, failureMessage),
 											},
 											{
 												Type:   buildapi.ConditionBuilderReady,
 												Status: corev1.ConditionTrue,
 												Reason: buildapi.BuilderReady,
+											},
+											{
+												Type:   buildapi.ConditionBuilderUpToDate,
+												Status: corev1.ConditionTrue,
+												Reason: buildapi.BuilderUpToDate,
 											},
 										},
 									},
@@ -2409,7 +2576,7 @@ func testImageReconciler(t *testing.T, when spec.G, it spec.S) {
 				it("deletes a failed build if more than the limit", func() {
 					imageWithBuilder.Spec.FailedBuildHistoryLimit = limit(4)
 					imageWithBuilder.Status.LatestBuildRef = "image-name-build-5"
-					imageWithBuilder.Status.Conditions = conditionNotReady(imageWithBuilder.Status.LatestBuildRef)
+					imageWithBuilder.Status.Conditions = conditionNotReady(imageWithBuilder)
 					imageWithBuilder.Status.BuildCounter = 5
 					sourceResolver := resolvedSourceResolver(imageWithBuilder)
 
@@ -2606,12 +2773,17 @@ func conditionReadyUnknown() corev1alpha1.Conditions {
 			Type:    corev1alpha1.ConditionReady,
 			Status:  corev1.ConditionUnknown,
 			Reason:  image.ResolverNotReadyReason,
-			Message: "SourceResolver image-name-source is not ready",
+			Message: "Error: SourceResolver 'image-name-source' is not ready",
 		},
 		{
 			Type:   buildapi.ConditionBuilderReady,
 			Status: corev1.ConditionTrue,
 			Reason: buildapi.BuilderReady,
+		},
+		{
+			Type:   buildapi.ConditionBuilderUpToDate,
+			Status: corev1.ConditionTrue,
+			Reason: buildapi.BuilderUpToDate,
 		},
 	}
 }
@@ -2622,12 +2794,17 @@ func conditionBuildExecuting(buildName string) corev1alpha1.Conditions {
 			Type:    corev1alpha1.ConditionReady,
 			Status:  corev1.ConditionUnknown,
 			Reason:  image.BuildRunningReason,
-			Message: fmt.Sprintf("%s is executing", buildName),
+			Message: fmt.Sprintf("Build '%s' is executing", buildName),
 		},
 		{
 			Type:   buildapi.ConditionBuilderReady,
 			Status: corev1.ConditionTrue,
 			Reason: buildapi.BuilderReady,
+		},
+		{
+			Type:   buildapi.ConditionBuilderUpToDate,
+			Status: corev1.ConditionTrue,
+			Reason: buildapi.BuilderUpToDate,
 		},
 	}
 }
@@ -2644,21 +2821,31 @@ func conditionReady() corev1alpha1.Conditions {
 			Status: corev1.ConditionTrue,
 			Reason: buildapi.BuilderReady,
 		},
+		{
+			Type:   buildapi.ConditionBuilderUpToDate,
+			Status: corev1.ConditionTrue,
+			Reason: buildapi.BuilderUpToDate,
+		},
 	}
 }
 
-func conditionNotReady(failedBuild string) corev1alpha1.Conditions {
+func conditionNotReady(failedBuild *buildapi.Image) corev1alpha1.Conditions {
 	return corev1alpha1.Conditions{
 		{
 			Type:    corev1alpha1.ConditionReady,
 			Status:  corev1.ConditionFalse,
 			Reason:  image.BuildFailedReason,
-			Message: fmt.Sprintf("Build %s failed: ", failedBuild),
+			Message: fmt.Sprintf("Error: Build '%s' in namespace '%s' failed: ", failedBuild.Status.LatestBuildRef, failedBuild.Namespace),
 		},
 		{
 			Type:   buildapi.ConditionBuilderReady,
 			Status: corev1.ConditionTrue,
 			Reason: buildapi.BuilderReady,
+		},
+		{
+			Type:   buildapi.ConditionBuilderUpToDate,
+			Status: corev1.ConditionTrue,
+			Reason: buildapi.BuilderUpToDate,
 		},
 	}
 }

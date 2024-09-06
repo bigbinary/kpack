@@ -4,14 +4,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/sigstore/cosign/v2/pkg/oci/remote"
+
 	"github.com/BurntSushi/toml"
-	"github.com/buildpacks/lifecycle/platform"
+	"github.com/buildpacks/lifecycle/platform/files"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/authn/k8schain"
 	"github.com/pkg/errors"
@@ -47,6 +48,7 @@ var (
 	cosignDockerMediaTypes  flaghelpers.CredentialsFlags
 	basicGitCredentials     flaghelpers.CredentialsFlags
 	sshGitCredentials       flaghelpers.CredentialsFlags
+	blobCredentials         flaghelpers.CredentialsFlags
 	logger                  *log.Logger
 )
 
@@ -59,6 +61,7 @@ func init() {
 	flag.Var(&dockerConfigCredentials, "dockerconfig", "Docker Config JSON credentials in the form of the path to the credential")
 	flag.Var(&basicGitCredentials, "basic-git", "Basic authentication for git of the form 'secretname=git.domain.com'")
 	flag.Var(&sshGitCredentials, "ssh-git", "SSH authentication for git of the form 'secretname=git.domain.com'")
+	flag.Var(&blobCredentials, "blob", "Authentication for blob of the form 'secretname=git.domain.com'")
 
 	flag.Var(&cosignAnnotations, "cosign-annotations", "Cosign custom signing annotations")
 	flag.Var(&cosignRepositories, "cosign-repositories", "Cosign signing repository of the form 'secretname=registry.example.com/project'")
@@ -69,7 +72,7 @@ func init() {
 func main() {
 	flag.Parse()
 
-	var report platform.ExportReport
+	var report files.Report
 	_, err := toml.DecodeFile(reportFilePath, &report)
 	if err != nil {
 		log.Fatal(err, "error decoding report toml file")
@@ -101,32 +104,8 @@ func main() {
 
 	keychain := authn.NewMultiKeychain(k8sNodeKeychain, creds)
 
-	metadataRetriever := cnb.RemoteMetadataRetriever{
-		ImageFetcher: &registry.Client{},
-	}
-
 	if len(report.Image.Tags) == 0 {
 		log.Fatal("no image found in report")
-	}
-
-	builtImageRef := fmt.Sprintf("%s@%s", report.Image.Tags[0], report.Image.Digest)
-
-	buildMetadata, err := metadataRetriever.GetBuildMetadata(builtImageRef, cacheTag, keychain)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	data, err := cnb.CompressBuildMetadata(buildMetadata)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(terminationMsgPath), 0777); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := ioutil.WriteFile(terminationMsgPath, data, 0666); err != nil {
-		log.Fatal(err)
 	}
 
 	if hasCosign() || notaryV1URL != "" {
@@ -150,12 +129,36 @@ func main() {
 		}
 	}
 
+	metadataRetriever := cnb.RemoteMetadataRetriever{
+		ImageFetcher: &registry.Client{},
+	}
+
+	builtImageRef := fmt.Sprintf("%s@%s", report.Image.Tags[0], report.Image.Digest)
+
+	buildMetadata, err := metadataRetriever.GetBuildMetadata(builtImageRef, cacheTag, keychain)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	data, err := cnb.CompressBuildMetadata(buildMetadata)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(terminationMsgPath), 0777); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(terminationMsgPath, data, 0666); err != nil {
+		log.Fatal(err)
+	}
+
 	logger.Println("Build successful")
 }
 
-func signImage(report platform.ExportReport, keychain authn.Keychain) error {
+func signImage(report files.Report, keychain authn.Keychain) error {
 	if hasCosign() {
-		cosignSigner := cosign.NewImageSigner(logger, sign.SignCmd)
+		cosignSigner := cosign.NewImageSigner(sign.SignCmd, remote.SignatureTag)
 
 		annotations, err := mapKeyValueArgs(cosignAnnotations)
 		if err != nil {

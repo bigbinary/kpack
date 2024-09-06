@@ -1,11 +1,13 @@
 package registry
 
 import (
-	"io/ioutil"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/pkg/errors"
@@ -35,13 +37,16 @@ type Fetcher struct {
 	Keychain authn.Keychain
 }
 
-func (f *Fetcher) Fetch(dir, registryImage string) error {
+func (f *Fetcher) Fetch(dir, registryImage string, metadataDir string) error {
 	f.Logger.Printf("Pulling %s...", registryImage)
 
-	img, _, err := f.Client.Fetch(f.Keychain, registryImage)
+	img, identifer, err := f.Client.Fetch(f.Keychain, registryImage)
 	if err != nil {
 		return err
 	}
+
+	parts := strings.SplitN(identifer, "@", 2)
+	ref, digest := parts[0], parts[1]
 
 	cType, err := getContentType(img)
 	if err != nil {
@@ -60,8 +65,29 @@ func (f *Fetcher) Fetch(dir, registryImage string) error {
 		handler = handleSource
 	}
 
-	if err := handler(img, dir); err != nil {
+	if err = handler(img, dir); err != nil {
 		return err
+	}
+
+	projectMetadataFile, err := os.Create(path.Join(metadataDir, "project-metadata.toml"))
+	if err != nil {
+		return errors.Wrapf(err, "invalid metadata destination '%s/project-metadata.toml' for image: %s", metadataDir, registryImage)
+	}
+	defer projectMetadataFile.Close()
+
+	projectMd := Project{
+		Source: Source{
+			Type: "image",
+			Metadata: Metadata{
+				Image: ref,
+			},
+			Version: Version{
+				Digest: digest,
+			},
+		},
+	}
+	if err := toml.NewEncoder(projectMetadataFile).Encode(projectMd); err != nil {
+		return errors.Wrapf(err, "invalid metadata destination '%s/project-metadata.toml' for image: %s", metadataDir, registryImage)
 	}
 
 	f.Logger.Printf("Successfully pulled %s in path %q", registryImage, dir)
@@ -104,7 +130,7 @@ func handleSource(img v1.Image, dir string) error {
 }
 
 func handleZip(img v1.Image, dir string) error {
-	tmpDir, err := ioutil.TempDir("", "")
+	tmpDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
 	}
@@ -129,7 +155,7 @@ func handleZip(img v1.Image, dir string) error {
 }
 
 func handleTar(img v1.Image, dir string) error {
-	tmpDir, err := ioutil.TempDir("", "")
+	tmpDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
 	}
@@ -149,7 +175,7 @@ func handleTar(img v1.Image, dir string) error {
 }
 
 func handleTarGZ(img v1.Image, dir string) error {
-	tmpDir, err := ioutil.TempDir("", "")
+	tmpDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
 	}
@@ -179,7 +205,7 @@ func getSourceFile(img v1.Image, dir string) (*os.File, error) {
 		return nil, err
 	}
 
-	infos, err := ioutil.ReadDir(dir)
+	infos, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -199,4 +225,22 @@ func fetchLayer(layer v1.Layer, dir string) error {
 	defer reader.Close()
 
 	return archive.ExtractTar(reader, dir, 0)
+}
+
+type Project struct {
+	Source Source `toml:"source"`
+}
+
+type Source struct {
+	Type     string   `toml:"type"`
+	Metadata Metadata `toml:"metadata"`
+	Version  Version  `toml:"version"`
+}
+
+type Metadata struct {
+	Image string `toml:"image"`
+}
+
+type Version struct {
+	Digest string `toml:"digest"`
 }

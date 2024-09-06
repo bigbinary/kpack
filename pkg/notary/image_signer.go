@@ -2,13 +2,13 @@ package notary
 
 import (
 	"encoding/hex"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/buildpacks/lifecycle/platform"
+	"github.com/buildpacks/lifecycle/platform/files"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -40,7 +40,7 @@ type ImageSigner struct {
 	Factory RepositoryFactory
 }
 
-func (s *ImageSigner) Sign(url, notarySecretDir string, report platform.ExportReport, keychain authn.Keychain) error {
+func (s *ImageSigner) Sign(url, notarySecretDir string, report files.Report, keychain authn.Keychain) error {
 	gun, targets, err := s.makeGUNAndTargets(report, keychain)
 	if err != nil {
 		return err
@@ -78,7 +78,7 @@ func (s *ImageSigner) Sign(url, notarySecretDir string, report platform.ExportRe
 	return nil
 }
 
-func (s *ImageSigner) makeGUNAndTargets(report platform.ExportReport, keychain authn.Keychain) (data.GUN, []*client.Target, error) {
+func (s *ImageSigner) makeGUNAndTargets(report files.Report, keychain authn.Keychain) (data.GUN, []*client.Target, error) {
 	gun := data.GUN("")
 	var targets []*client.Target
 	for _, tag := range report.Image.Tags {
@@ -126,7 +126,7 @@ func (s *ImageSigner) makeGUNAndTargets(report platform.ExportReport, keychain a
 func (s *ImageSigner) makeCryptoService(notarySecretDir string) (*cryptoservice.CryptoService, error) {
 	cryptoStore := storage.NewMemoryStore(nil)
 
-	fileInfos, err := ioutil.ReadDir(notarySecretDir)
+	fileInfos, err := os.ReadDir(notarySecretDir)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (s *ImageSigner) makeCryptoService(notarySecretDir string) (*cryptoservice.
 	privateKeyFound := false
 	for _, info := range fileInfos {
 		if strings.HasSuffix(info.Name(), ".key") {
-			buf, err := ioutil.ReadFile(filepath.Join(notarySecretDir, info.Name()))
+			buf, err := os.ReadFile(filepath.Join(notarySecretDir, info.Name()))
 			if err != nil {
 				return nil, err
 			}
@@ -160,7 +160,7 @@ func (s *ImageSigner) makeCryptoService(notarySecretDir string) (*cryptoservice.
 
 func k8sSecretPassRetriever(notarySecretDir string) func(_, _ string, _ bool, _ int) (passphrase string, giveup bool, err error) {
 	return func(_, _ string, _ bool, _ int) (passphrase string, giveup bool, err error) {
-		buf, err := ioutil.ReadFile(filepath.Join(notarySecretDir, "password"))
+		buf, err := os.ReadFile(filepath.Join(notarySecretDir, "password"))
 		return strings.TrimSpace(string(buf)), false, err
 	}
 }

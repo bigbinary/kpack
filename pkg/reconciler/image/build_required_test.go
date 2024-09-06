@@ -57,6 +57,7 @@ func testImageBuilds(t *testing.T, when spec.G, it spec.S) {
 
 	builder := &TestBuilderResource{
 		Name:         "builder-Name",
+		Namespace:    "test-ns",
 		LatestImage:  "some/builder@sha256:builder-digest",
 		BuilderReady: true,
 		BuilderMetadata: []corev1alpha1.BuildpackMetadata{
@@ -799,11 +800,13 @@ func testImageBuilds(t *testing.T, when spec.G, it spec.S) {
 
 type TestBuilderResource struct {
 	BuilderReady     bool
+	BuilderUpToDate  bool
 	BuilderMetadata  []corev1alpha1.BuildpackMetadata
 	ImagePullSecrets []corev1.LocalObjectReference
 	LatestImage      string
 	LatestRunImage   string
 	Name             string
+	Namespace        string
 	Kind             string
 }
 
@@ -816,6 +819,10 @@ func (t TestBuilderResource) BuildBuilderSpec() corev1alpha1.BuildBuilderSpec {
 
 func (t TestBuilderResource) Ready() bool {
 	return t.BuilderReady
+}
+
+func (t TestBuilderResource) UpToDate() bool {
+	return t.BuilderUpToDate
 }
 
 func (t TestBuilderResource) BuildpackMetadata() corev1alpha1.BuildpackMetadataList {
@@ -836,4 +843,8 @@ func (t TestBuilderResource) GetKind() string {
 
 func (t TestBuilderResource) ConditionReadyMessage() string {
 	return ""
+}
+
+func (t TestBuilderResource) GetNamespace() string {
+	return t.Namespace
 }

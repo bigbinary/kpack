@@ -7,6 +7,9 @@ on:
     - release/**
     tags:
     - v[0-9]+.[0-9]+.[0-9]+-?**
+  pull_request:
+    branches:
+     - release/**
 
 defaults:
   run:
@@ -22,12 +25,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
 
@@ -35,15 +38,15 @@ jobs:
       run: make unit-ci
 
     - name: Report coverage
-      uses: codecov/codecov-action@v3.1.4
+      uses: codecov/codecov-action@v4.5.0
 
   controller-image:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -54,14 +57,15 @@ jobs:
         pack_version: ${{ env.PACK_VERSION }}
         tag: ${{ env.PUBLIC_IMAGE_DEV_REPO }}/controller
         bp_go_targets: "./cmd/controller"
+        artifact_name: controller-image
 
   webhook-image:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -72,14 +76,15 @@ jobs:
         pack_version: ${{ env.PACK_VERSION }}
         tag: ${{ env.PUBLIC_IMAGE_DEV_REPO }}/webhook
         bp_go_targets: "./cmd/webhook"
+        artifact_name: webhook-image
 
   completion-image:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -90,14 +95,15 @@ jobs:
         pack_version: ${{ env.PACK_VERSION }}
         tag: ${{ env.PUBLIC_IMAGE_DEV_REPO }}/completion
         bp_go_targets: "./cmd/completion"
+        artifact_name: completion-image
 
   build-init-image:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -108,14 +114,15 @@ jobs:
         pack_version: ${{ env.PACK_VERSION }}
         tag: ${{ env.PUBLIC_IMAGE_DEV_REPO }}/build-init
         bp_go_targets: "./cmd/build-init"
+        artifact_name: build-init-image
 
   build-waiter-image:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -126,14 +133,15 @@ jobs:
         pack_version: ${{ env.PACK_VERSION }}
         tag: ${{ env.PUBLIC_IMAGE_DEV_REPO }}/build-waiter
         bp_go_targets: "./cmd/build-waiter"
+        artifact_name: build-waiter-image
 
   rebase-image:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -144,14 +152,15 @@ jobs:
         pack_version: ${{ env.PACK_VERSION }}
         tag: ${{ env.PUBLIC_IMAGE_DEV_REPO }}/rebase
         bp_go_targets: "./cmd/rebase"
+        artifact_name: rebase-image
 
   build-init-windows-image:
     runs-on: windows-2019
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -164,14 +173,15 @@ jobs:
         bp_go_targets: '.\cmd\build-init;.\cmd\network-wait-launcher'
         builder: gcr.io/cf-build-service-public/kpack-windows-builder
         additional_pack_args: "--trust-builder"
+        artifact_name: build-init-windows-image
 
   completion-windows-image:
     runs-on: windows-2019
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -184,20 +194,21 @@ jobs:
         bp_go_targets: '.\cmd\completion'
         builder: gcr.io/cf-build-service-public/kpack-windows-builder
         additional_pack_args: "--trust-builder"
+        artifact_name: completion-windows-image
 
   lifecycle-image:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PASSWORD }}
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
     - name: Build
@@ -209,9 +220,9 @@ jobs:
         mkdir images
         echo $image > images/lifecycle
     - name: Upload Image Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: images
+        name: lifecycle-image
         path: images/
 
   generate-pre-release-yaml:
@@ -228,41 +239,43 @@ jobs:
     - completion-windows-image
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
 
     - name: Setup carvel
-      uses: carvel-dev/setup-action@v1
+      uses: carvel-dev/setup-action@v2
       with:
         token: ${{ secrets.RELEASE_TOKEN }}
         only: ytt, kapp
 
     - name: Download artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
-        name: images
+        pattern: '*-image'
+        path: images
+        merge-multiple: true
 
     - name: Build release yaml
-      run: |        
+      run: |
         ytt -f config/ \
-          -v controller.image=$(cat controller) \
-          -v webhook.image=$(cat webhook) \
-          -v build_init.image=$(cat build-init) \
-          -v build_init_windows.image=$(cat build-init-windows) \
-          -v build_waiter.image=$(cat build-waiter) \
-          -v rebase.image=$(cat rebase) \
-          -v completion.image=$(cat completion) \
-          -v completion_windows.image=$(cat completion-windows) \
-          -v lifecycle.image=$(cat lifecycle) > prerelease.yaml
+          -v controller.image=$(cat images/controller) \
+          -v webhook.image=$(cat images/webhook) \
+          -v build_init.image=$(cat images/build-init) \
+          -v build_init_windows.image=$(cat images/build-init-windows) \
+          -v build_waiter.image=$(cat images/build-waiter) \
+          -v rebase.image=$(cat images/rebase) \
+          -v completion.image=$(cat images/completion) \
+          -v completion_windows.image=$(cat images/completion-windows) \
+          -v lifecycle.image=$(cat images/lifecycle) > prerelease.yaml
 
         cat prerelease.yaml
 
     - name: Upload Pre-Release
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: prerelease
         path: prerelease.yaml
@@ -282,24 +295,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
 
     - name: Setup crane
-      uses: imjasonh/setup-crane@v0.3
+      uses: imjasonh/setup-crane@v0.4
 
     - name: Setup carvel
-      uses: carvel-dev/setup-action@v1
+      uses: carvel-dev/setup-action@v2
       with:
         token: ${{ secrets.RELEASE_TOKEN }}
         only: ytt, kapp
 
     - name: Download release
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: prerelease
 
@@ -350,13 +363,13 @@ jobs:
         EOF
 
     - name: Create Kind Cluster
-      uses: helm/kind-action@v1.8.0
+      uses: helm/kind-action@v1.10.0
       with:
         cluster_name: e2e
         config: kind.yaml
 
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ env.REGISTRY_URL }}
         username: ${{ env.REGISTRY_USER }}
@@ -367,7 +380,25 @@ jobs:
         # make the registry container accessible by name from inside the cluster
         docker network connect kind registry.local
 
-        kapp deploy -a kpack -y -f prerelease.yaml
+        cat <<EOF > overlay.yaml
+        #@ load("@ytt:overlay", "overlay")
+        #@overlay/match by=overlay.subset({"metadata":{"name":"kpack-controller"}, "kind": "Deployment"})
+        ---
+        spec:
+          template:
+            spec:
+              containers:
+              #@overlay/match by="name"
+              - name: controller
+                #@overlay/match-child-defaults missing_ok=True
+                env:
+                #@overlay/match by="name"
+                #@overlay/replace or_add=True
+                - name: EXPERIMENTAL_GENERATE_SLSA_ATTESTATION
+                  value: "true"
+        EOF
+
+        ytt -f prerelease.yaml -f overlay.yaml | kapp deploy -a kpack -y -f-
 
         export IMAGE_REGISTRY=${{ env.REGISTRY_URL }}
         export IMAGE_REGISTRY_USERNAME=${{ env.REGISTRY_USER }}
@@ -378,7 +409,7 @@ jobs:
         export GIT_BASIC_PASSWORD="${{ secrets.E2E_PRIVATE_REPO_PASSWORD }}"
         export GIT_SSH_PRIVATE_KEY="${{ secrets.E2E_PRIVATE_REPO_PRIVATE_KEY }}"
 
-        make e2e
+        E2E_SLSA="true" make e2e
         kapp delete -a kpack -y
 
     - name: Run tests with Istio
@@ -439,27 +470,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
 
     - name: Setup crane
-      uses: imjasonh/setup-crane@v0.3
+      uses: imjasonh/setup-crane@v0.4
 
     - name: Setup carvel
-      uses: carvel-dev/setup-action@v1
+      uses: carvel-dev/setup-action@v2
       with:
         token: ${{ secrets.RELEASE_TOKEN }}
         only: ytt
 
     - name: Download artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
+      with:
+        pattern: '*-image'
+        path: images
+        merge-multiple: true
 
     - name: Docker Login
-      uses: docker/login-action@v2.2.0
+      uses: docker/login-action@v3.2.0
       with:
         registry: ${{ secrets.REGISTRY_HOST }}
         username: ${{ secrets.REGISTRY_USER }}
@@ -486,12 +521,13 @@ jobs:
           final_repo="${{ env.PUBLIC_IMAGE_REPO }}/${name}" 
           
           crane copy "$dev_image" "$final_repo"
+          crane tag "${final_repo}@${digest}" ${{ env.KPACK_VERSION }}
           
           echo "${final_repo}@${digest}" > final-image-refs/$name
         done
 
     - name: Upload image refs
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: final-image-refs
         path: final-image-refs/*
@@ -514,13 +550,13 @@ jobs:
         echo "sha=$(shasum -a 256 $file)" >> $GITHUB_OUTPUT
 
     - name: Upload Release
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: release
         path: release-${{ env.KPACK_VERSION }}.yaml
 
     - name: Create Draft Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         name: kpack v${{ env.KPACK_VERSION }}
         tag_name: v${{ env.KPACK_VERSION }}

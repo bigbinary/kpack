@@ -101,6 +101,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.ClusterStoreStatus":         schema_pkg_apis_build_v1alpha2_ClusterStoreStatus(ref),
 		"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.CosignAnnotation":           schema_pkg_apis_build_v1alpha2_CosignAnnotation(ref),
 		"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.CosignConfig":               schema_pkg_apis_build_v1alpha2_CosignConfig(ref),
+		"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.CosignSignature":            schema_pkg_apis_build_v1alpha2_CosignSignature(ref),
 		"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.Image":                      schema_pkg_apis_build_v1alpha2_Image(ref),
 		"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.ImageBuild":                 schema_pkg_apis_build_v1alpha2_ImageBuild(ref),
 		"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.ImageBuilder":               schema_pkg_apis_build_v1alpha2_ImageBuilder(ref),
@@ -2395,6 +2396,12 @@ func schema_pkg_apis_build_v1alpha2_BuildStatus(ref common.ReferenceCallback) co
 							Format: "",
 						},
 					},
+					"latestAttestationImage": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"podName": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
@@ -2702,6 +2709,21 @@ func schema_pkg_apis_build_v1alpha2_BuilderSpec(ref common.ReferenceCallback) co
 							},
 						},
 					},
+					"additionalLabels": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -2799,11 +2821,24 @@ func schema_pkg_apis_build_v1alpha2_BuilderStatus(ref common.ReferenceCallback) 
 							Format: "",
 						},
 					},
+					"signaturePaths": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/pivotal/kpack/pkg/apis/build/v1alpha2.CosignSignature"),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/pivotal/kpack/pkg/apis/core/v1alpha1.BuildStack", "github.com/pivotal/kpack/pkg/apis/core/v1alpha1.BuildpackMetadata", "github.com/pivotal/kpack/pkg/apis/core/v1alpha1.Condition", "github.com/pivotal/kpack/pkg/apis/core/v1alpha1.OrderEntry"},
+			"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.CosignSignature", "github.com/pivotal/kpack/pkg/apis/core/v1alpha1.BuildStack", "github.com/pivotal/kpack/pkg/apis/core/v1alpha1.BuildpackMetadata", "github.com/pivotal/kpack/pkg/apis/core/v1alpha1.Condition", "github.com/pivotal/kpack/pkg/apis/core/v1alpha1.OrderEntry"},
 	}
 }
 
@@ -3122,6 +3157,21 @@ func schema_pkg_apis_build_v1alpha2_ClusterBuilderSpec(ref common.ReferenceCallb
 							},
 						},
 					},
+					"additionalLabels": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 					"serviceAccountRef": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
@@ -3237,15 +3287,10 @@ func schema_pkg_apis_build_v1alpha2_ClusterBuildpackSpec(ref common.ReferenceCal
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"source": {
-						VendorExtensible: spec.VendorExtensible{
-							Extensions: spec.Extensions{
-								"x-kubernetes-list-type": "",
-							},
-						},
+					"image": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("github.com/pivotal/kpack/pkg/apis/core/v1alpha1.ImageSource"),
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 					"serviceAccountRef": {
@@ -3257,7 +3302,7 @@ func schema_pkg_apis_build_v1alpha2_ClusterBuildpackSpec(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			"github.com/pivotal/kpack/pkg/apis/core/v1alpha1.ImageSource", "k8s.io/api/core/v1.ObjectReference"},
+			"k8s.io/api/core/v1.ObjectReference"},
 	}
 }
 
@@ -3828,6 +3873,33 @@ func schema_pkg_apis_build_v1alpha2_CosignConfig(ref common.ReferenceCallback) c
 		},
 		Dependencies: []string{
 			"github.com/pivotal/kpack/pkg/apis/build/v1alpha2.CosignAnnotation"},
+	}
+}
+
+func schema_pkg_apis_build_v1alpha2_CosignSignature(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"signingSecret": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"targetDigest": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"signingSecret", "targetDigest"},
+			},
+		},
 	}
 }
 
@@ -4411,6 +4483,21 @@ func schema_pkg_apis_build_v1alpha2_NamespacedBuilderSpec(ref common.ReferenceCa
 							},
 						},
 					},
+					"additionalLabels": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 					"serviceAccountName": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
@@ -4700,6 +4787,12 @@ func schema_pkg_apis_core_v1alpha1_Blob(ref common.ReferenceCallback) common.Ope
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"integer"},
 							Format: "int64",
+						},
+					},
+					"auth": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 				},
@@ -5102,7 +5195,6 @@ func schema_pkg_apis_core_v1alpha1_Condition(ref common.ReferenceCallback) commo
 					"lastTransitionTime": {
 						SchemaProps: spec.SchemaProps{
 							Description: "LastTransitionTime is the last time the condition transitioned from one status to another. We use VolatileTime in place of metav1.Time to exclude this from creating equality.Semantic differences (all other things held constant).",
-							Default:     map[string]interface{}{},
 							Type: []string{"string"}, Format: "",
 						},
 					},
@@ -5147,6 +5239,12 @@ func schema_pkg_apis_core_v1alpha1_Git(ref common.ReferenceCallback) common.Open
 							Default: "",
 							Type:    []string{"string"},
 							Format:  "",
+						},
+					},
+					"initializeSubmodules": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
+							Format: "",
 						},
 					},
 				},
@@ -5380,6 +5478,12 @@ func schema_pkg_apis_core_v1alpha1_ResolvedGitSource(ref common.ReferenceCallbac
 							Format:  "",
 						},
 					},
+					"initializeSubmodules": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
+							Format: "",
+						},
+					},
 				},
 				Required: []string{"url", "revision", "type"},
 			},
@@ -5550,8 +5654,7 @@ func schema_pkg_apis_core_v1alpha1_VolatileTime(ref common.ReferenceCallback) co
 				Properties: map[string]spec.Schema{
 					"inner": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},
 				},
