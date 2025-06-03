@@ -11,9 +11,10 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/pivotal/kpack/pkg/apis/build/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/pivotal/kpack/pkg/apis/build/v1alpha2"
 )
 
 type config struct {
@@ -33,6 +34,10 @@ type dockerCredentials map[string]authn.AuthConfig
 type dockerConfigJson struct {
 	Auths dockerCredentials `json:"auths"`
 }
+
+const (
+	lifecycleImage = "mirror.gcr.io/buildpacksio/lifecycle"
+)
 
 func loadConfig(t *testing.T) config {
 	gitPrivateRepo, _ := os.LookupEnv("GIT_PRIVATE_REPO")

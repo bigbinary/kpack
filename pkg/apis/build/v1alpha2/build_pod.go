@@ -86,39 +86,10 @@ type ServiceBinding interface {
 }
 
 type BuildPodImages struct {
-	BuildInitImage         string
-	BuildWaiterImage       string
-	CompletionImage        string
-	RebaseImage            string
-	BuildInitWindowsImage  string
-	CompletionWindowsImage string
-}
-
-func (bpi *BuildPodImages) buildInit(os string) string {
-	switch os {
-	case "windows":
-		return bpi.BuildInitWindowsImage
-	default:
-		return bpi.BuildInitImage
-	}
-}
-
-func (bpi *BuildPodImages) completion(os string) string {
-	switch os {
-	case "windows":
-		return bpi.CompletionWindowsImage
-	default:
-		return bpi.CompletionImage
-	}
-}
-
-func terminationMsgPath(os string) string {
-	switch os {
-	case "windows":
-		return ""
-	default:
-		return completionTerminationMessagePath
-	}
+	BuildInitImage   string
+	BuildWaiterImage string
+	CompletionImage  string
+	RebaseImage      string
 }
 
 // +k8s:deepcopy-gen=false
@@ -132,17 +103,13 @@ type BuildContext struct {
 	SSHTrustUnknownHost       bool
 }
 
-func (c BuildContext) os() string {
-	return c.BuildPodBuilderConfig.OS
-}
-
 type BuildPodBuilderConfig struct {
-	StackID      string
-	RunImage     string
-	Uid          int64
-	Gid          int64
-	PlatformAPIs []string
-	OS           string
+	StackID       string
+	RunImage      string
+	Uid           int64
+	Gid           int64
+	PlatformAPIs  []string
+	ResolvedImage string
 }
 
 var (
@@ -185,11 +152,6 @@ var (
 		MountPath: "/var/report",
 		ReadOnly:  false,
 	}
-	networkWaitLauncherMount = corev1.VolumeMount{
-		Name:      networkWaitLauncherVolumeName,
-		MountPath: "/networkWait",
-		ReadOnly:  false,
-	}
 	homeEnv = corev1.EnvVar{
 		Name:  "HOME",
 		Value: "/builder/home",
@@ -210,7 +172,6 @@ var (
 )
 
 type stepModifier func(corev1.Container) corev1.Container
-type podModifier func(*corev1.Pod) *corev1.Pod
 
 func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*corev1.Pod, error) {
 	platformAPI, err := buildContext.highestSupportedPlatformAPI(b)
@@ -261,7 +222,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 	var exporterCacheArgs []string
 	var cacheVolumes []corev1.VolumeMount
 
-	if b.Spec.NeedVolumeCache() && buildContext.os() != "windows" {
+	if b.Spec.NeedVolumeCache() {
 		genericCacheArgs = []string{"-cache-dir=/cache"}
 		cacheVolumes = []corev1.VolumeMount{cacheMount}
 		exporterCacheArgs = genericCacheArgs
@@ -269,6 +230,8 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 		useCacheFromLastBuild := b.Spec.LastBuild != nil && b.Spec.LastBuild.Cache.Image != ""
 		if useCacheFromLastBuild {
 			genericCacheArgs = []string{fmt.Sprintf("-cache-image=%s", b.Spec.LastBuild.Cache.Image)}
+		} else {
+			genericCacheArgs = []string{fmt.Sprintf("-cache-image=%s", b.Spec.Cache.Registry.Tag)}
 		}
 		analyzerCacheArgs = genericCacheArgs
 		exporterCacheArgs = []string{fmt.Sprintf("-cache-image=%s", b.Spec.Cache.Registry.Tag)}
@@ -278,7 +241,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 
 	analyzeContainer := corev1.Container{
 		Name:      AnalyzeContainerName,
-		Image:     b.Spec.Builder.Image,
+		Image:     buildContext.BuildPodBuilderConfig.ResolvedImage,
 		Command:   []string{AnalyzeCommand},
 		Resources: b.Spec.Resources,
 		Args: args(
@@ -304,7 +267,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 				return []string{b.Tag()}
 			}(),
 		),
-		SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
+		SecurityContext: containerSecurityContext(),
 		VolumeMounts: volumeMounts([]corev1.VolumeMount{
 			layersMount,
 			workspaceVolume,
@@ -317,15 +280,10 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 		},
 		ImagePullPolicy: corev1.PullIfNotPresent,
 	}
-	analyzerContainerMods := ifWindows(
-		buildContext.os(),
-		addNetworkWaitLauncherVolume(),
-		useNetworkWaitLauncher(dnsProbeHost),
-		userprofileHomeEnv(),
-	)
+
 	detectContainer := corev1.Container{
 		Name:      DetectContainerName,
-		Image:     b.Spec.Builder.Image,
+		Image:     buildContext.BuildPodBuilderConfig.ResolvedImage,
 		Command:   []string{DetectCommand},
 		Resources: b.Spec.Resources,
 		Args: []string{
@@ -342,9 +300,8 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 		Env: []corev1.EnvVar{
 			platformApiVersionEnvVar,
 		},
-		SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
+		SecurityContext: containerSecurityContext(),
 	}
-	detectContainerMods := ifWindows(buildContext.os(), addNetworkWaitLauncherVolume(), useNetworkWaitLauncher(dnsProbeHost))
 
 	dateTime, err := parseTime(b.Spec.CreationTime)
 	if err != nil {
@@ -374,7 +331,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 				step(
 					corev1.Container{
 						Name:    CompletionContainerName,
-						Image:   images.completion(buildContext.os()),
+						Image:   images.CompletionImage,
 						Command: []string{CompletionCommand},
 						Env: []corev1.EnvVar{
 							homeEnv,
@@ -387,7 +344,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							b.cosignArgs(),
 							cosignSecretArgs,
 						),
-						TerminationMessagePath:   terminationMsgPath(buildContext.os()),
+						TerminationMessagePath:   completionTerminationMessagePath,
 						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 						Resources:                b.Spec.Resources,
 						VolumeMounts: volumeMounts(
@@ -400,20 +357,19 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							},
 						),
 						ImagePullPolicy: corev1.PullIfNotPresent,
-						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
-					},
-					ifWindows(buildContext.os(), addNetworkWaitLauncherVolume(), useNetworkWaitLauncher(dnsProbeHost), userprofileHomeEnv())...)
+						SecurityContext: containerSecurityContext(),
+					})
 			}),
 			SecurityContext: podSecurityContext(buildContext.BuildPodBuilderConfig),
 			InitContainers: steps(func(step func(corev1.Container, ...stepModifier)) {
 				step(
 					corev1.Container{
 						Name:            PrepareContainerName,
-						Image:           images.buildInit(buildContext.os()),
+						Image:           images.BuildInitImage,
 						Command:         []string{PrepareCommand},
 						Args:            append(secretArgs, imagePullArgs...),
 						Resources:       b.Spec.Resources,
-						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
+						SecurityContext: containerSecurityContext(),
 						Env: append(
 							buildEnv,
 							corev1.EnvVar{
@@ -471,17 +427,16 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							},
 						),
 					},
-					ifWindows(buildContext.os(), addNetworkWaitLauncherVolume())...,
 				)
-				step(analyzeContainer, analyzerContainerMods...)
-				step(detectContainer, detectContainerMods...)
+				step(analyzeContainer)
+				step(detectContainer)
 				step(
 					corev1.Container{
 						Name:            RestoreContainerName,
-						Image:           b.Spec.Builder.Image,
+						Image:           buildContext.BuildPodBuilderConfig.ResolvedImage,
 						Command:         []string{RestoreCommand},
 						Resources:       b.Spec.Resources,
-						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
+						SecurityContext: containerSecurityContext(),
 						Args: args([]string{
 							"-group=/layers/group.toml",
 							"-layers=/layers",
@@ -498,19 +453,14 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 						},
 						ImagePullPolicy: corev1.PullIfNotPresent,
 					},
-					ifWindows(buildContext.os(),
-						addNetworkWaitLauncherVolume(),
-						useNetworkWaitLauncher(dnsProbeHost),
-						userprofileHomeEnv(),
-					)...,
 				)
 				step(
 					corev1.Container{
 						Name:            BuildContainerName,
-						Image:           b.Spec.Builder.Image,
+						Image:           buildContext.BuildPodBuilderConfig.ResolvedImage,
 						Command:         []string{BuildCommand},
 						Resources:       b.Spec.Resources,
-						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
+						SecurityContext: containerSecurityContext(),
 						Args: []string{
 							"-layers=/layers",
 							"-app=/workspace",
@@ -528,15 +478,14 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							serviceBindingRootEnv,
 						},
 					},
-					ifWindows(buildContext.os(), addNetworkWaitLauncherVolume(), useNetworkWaitLauncher(dnsProbeHost))...,
 				)
 				step(
 					corev1.Container{
 						Name:            ExportContainerName,
-						Image:           b.Spec.Builder.Image,
+						Image:           buildContext.BuildPodBuilderConfig.ResolvedImage,
 						Command:         []string{ExportCommand},
 						Resources:       b.Spec.Resources,
-						SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
+						SecurityContext: containerSecurityContext(),
 						Args: args(
 							[]string{
 								"-layers=/layers",
@@ -579,15 +528,10 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							}()),
 						ImagePullPolicy: corev1.PullIfNotPresent,
 					},
-					ifWindows(buildContext.os(),
-						addNetworkWaitLauncherVolume(),
-						useNetworkWaitLauncher(dnsProbeHost),
-						userprofileHomeEnv(),
-					)...,
 				)
 			}),
 			ServiceAccountName: b.Spec.ServiceAccountName,
-			NodeSelector:       b.nodeSelector(buildContext.os()),
+			NodeSelector:       b.Spec.NodeSelector,
 			Tolerations:        b.Spec.Tolerations,
 			Affinity:           b.Spec.Affinity,
 			RuntimeClassName:   b.Spec.RuntimeClassName,
@@ -596,7 +540,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 				secretVolumes,
 				cosignVolumes,
 				imagePullVolumes,
-				b.cacheVolume(buildContext.os()),
+				b.cacheVolume(),
 				[]corev1.Volume{
 					{
 						Name: layersVolumeName,
@@ -642,7 +586,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 		},
 	}
 
-	if buildContext.InjectedSidecarSupport && buildContext.os() != "windows" {
+	if buildContext.InjectedSidecarSupport {
 		pod = b.useStandardContainers(images.BuildWaiterImage, pod)
 	}
 
@@ -653,12 +597,7 @@ func boolPointer(b bool) *bool {
 	return &b
 }
 
-func containerSecurityContext(config BuildPodBuilderConfig) *corev1.SecurityContext {
-	if config.OS == "windows" {
-		return nil
-
-	}
-
+func containerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             boolPointer(true),
 		AllowPrivilegeEscalation: boolPointer(false),
@@ -669,41 +608,12 @@ func containerSecurityContext(config BuildPodBuilderConfig) *corev1.SecurityCont
 }
 
 func podSecurityContext(config BuildPodBuilderConfig) *corev1.PodSecurityContext {
-	if config.OS == "windows" {
-		return nil
-	}
-
 	return &corev1.PodSecurityContext{
 		RunAsNonRoot:   boolPointer(true),
 		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		FSGroup:        &config.Gid,
 		RunAsUser:      &config.Uid,
 		RunAsGroup:     &config.Gid,
-	}
-}
-
-func ifWindows(os string, modifiers ...stepModifier) []stepModifier {
-	if os == "windows" {
-		return modifiers
-	}
-
-	return []stepModifier{noOpModifer}
-}
-
-func useNetworkWaitLauncher(dnsProbeHost string) stepModifier {
-	return func(container corev1.Container) corev1.Container {
-		startCommand := container.Command
-		container.Args = args([]string{dnsProbeHost, "--"}, startCommand, container.Args)
-
-		container.Command = []string{"/networkWait/network-wait-launcher"}
-		return container
-	}
-}
-
-func addNetworkWaitLauncherVolume() stepModifier {
-	return func(container corev1.Container) corev1.Container {
-		container.VolumeMounts = append(container.VolumeMounts, networkWaitLauncherMount)
-		return container
 	}
 }
 
@@ -783,22 +693,6 @@ func (b *Build) useStandardContainers(buildWaiterImage string, pod *corev1.Pod) 
 	return pod
 }
 
-func userprofileHomeEnv() stepModifier {
-	return func(container corev1.Container) corev1.Container {
-		for i, env := range container.Env {
-			if env.Name == "HOME" {
-				container.Env[i].Name = "USERPROFILE"
-			}
-		}
-
-		return container
-	}
-}
-
-func noOpModifer(container corev1.Container) corev1.Container {
-	return container
-}
-
 func (b *Build) notarySecretVolume() corev1.Volume {
 	config := b.NotaryV1Config()
 	if config == nil {
@@ -868,7 +762,7 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: b.Spec.ServiceAccountName,
-			NodeSelector:       b.nodeSelector("linux"),
+			NodeSelector:       b.Spec.NodeSelector,
 			Tolerations:        b.Spec.Tolerations,
 			Affinity:           b.Spec.Affinity,
 			RuntimeClassName:   b.Spec.RuntimeClassName,
@@ -896,7 +790,7 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 			Containers: []corev1.Container{
 				{
 					Name:    CompletionContainerName,
-					Image:   images.completion(buildContext.os()),
+					Image:   images.CompletionImage,
 					Command: []string{CompletionCommand},
 					Env: []corev1.EnvVar{
 						{Name: CacheTagEnvVar, Value: b.Spec.RegistryCacheTag()},
@@ -908,8 +802,8 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 						b.cosignArgs(),
 						cosignSecretArgs,
 					),
-					SecurityContext:          containerSecurityContext(buildContext.BuildPodBuilderConfig),
-					TerminationMessagePath:   terminationMsgPath(buildContext.os()),
+					SecurityContext:          containerSecurityContext(),
+					TerminationMessagePath:   completionTerminationMessagePath,
 					TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 					Resources:                b.Spec.Resources,
 					VolumeMounts: volumeMounts(
@@ -926,7 +820,7 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 					Image:           images.RebaseImage,
 					Command:         []string{RebaseCommand},
 					Resources:       b.Spec.Resources,
-					SecurityContext: containerSecurityContext(buildContext.BuildPodBuilderConfig),
+					SecurityContext: containerSecurityContext(),
 					Args: args(a(
 						"--run-image",
 						runImage,
@@ -960,7 +854,7 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 		Status: corev1.PodStatus{},
 	}
 
-	if buildContext.InjectedSidecarSupport && buildContext.os() != "windows" {
+	if buildContext.InjectedSidecarSupport {
 		pod = b.useStandardContainers(images.BuildWaiterImage, pod)
 	}
 
@@ -968,8 +862,8 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 
 }
 
-func (b *Build) cacheVolume(os string) []corev1.Volume {
-	if !b.Spec.NeedVolumeCache() || os == "windows" {
+func (b *Build) cacheVolume() []corev1.Volume {
+	if !b.Spec.NeedVolumeCache() {
 		return []corev1.Volume{}
 	}
 
@@ -1026,7 +920,7 @@ func (b *Build) setupSecretVolumesAndArgs(secrets []corev1.Secret, filter func(s
 			annotatedUrl := secret.Annotations[BlobSecretAnnotationPrefix]
 			args = append(args, fmt.Sprintf("-blob=%s=%s", secret.Name, annotatedUrl))
 		default:
-			//ignoring secret
+			// ignoring secret
 			continue
 		}
 
@@ -1132,15 +1026,6 @@ func (bc BuildContext) highestSupportedPlatformAPI(b *Build) (*semver.Version, e
 	}
 
 	return nil, errors.Errorf("unsupported builder platform API versions: %s", strings.Join(bc.BuildPodBuilderConfig.PlatformAPIs, ","))
-}
-
-func (b Build) nodeSelector(os string) map[string]string {
-	if b.Spec.NodeSelector == nil {
-		b.Spec.NodeSelector = map[string]string{}
-	}
-
-	b.Spec.NodeSelector[k8sOSLabel] = os
-	return b.Spec.NodeSelector
 }
 
 func setupBindingVolumesAndMounts(bindings []ServiceBinding) ([]corev1.Volume, []corev1.VolumeMount, error) {

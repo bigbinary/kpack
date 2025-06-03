@@ -1,10 +1,5 @@
 #!/bin/bash
 
-function lifecycle_image_build() {
-    image=$1
-    go run hack/lifecycle/main.go --tag=${image}
-}
-
 function generate_kbld_config_pack() {
   path=$1
   registry=$2
@@ -74,14 +69,8 @@ function generate_kbld_config_pack() {
         builder: paketobuildpacks/builder-jammy-tiny
         rawOptions: [${completion_args// /,}]
   overrides:
-  - image: build-init-windows
-    newImage: build-init-windows
-    preresolved: true
-  - image: completion-windows
-    newImage: completion-windows
-    preresolved: true
-  - image: lifecycle
-    newImage: $lifecycle_image
+    - image: lifecycle
+      newImage: mirror.gcr.io/buildpacksio/lifecycle
   destinations:
   - image: controller
     newImage: $controller_image
@@ -142,14 +131,8 @@ function generate_kbld_config_ko() {
       build:
         rawOptions: [${args// /,}]
   overrides:
-  - image: build-init-windows
-    newImage: build-init-windows
-    preresolved: true
-  - image: completion-windows
-    newImage: completion-windows
-    preresolved: true
   - image: lifecycle
-    newImage: $lifecycle_image
+    newImage: mirror.gcr.io/buildpacksio/lifecycle
   destinations:
   - image: controller
     newImage: $controller_image
@@ -193,10 +176,6 @@ function compile() {
   build_waiter_image=${IMAGE_PREFIX}build-waiter
   rebase_image=${IMAGE_PREFIX}rebase
   completion_image=${IMAGE_PREFIX}completion
-  lifecycle_image=${IMAGE_PREFIX}lifecycle
-
-  echo "Building Lifecycle"
-  lifecycle_image_build ${lifecycle_image}
 
   echo "Generating kbld config"
   temp_dir=$(mktemp -d)

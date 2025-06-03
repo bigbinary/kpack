@@ -57,7 +57,8 @@ func testAttester(t *testing.T, when spec.G, it spec.S) {
 	}
 
 	buildMetadata := &cnb.BuildMetadata{
-		LatestImage: "some-registry.io/some/repo@sha256:27227f3eaf20afcd527f31bcaaa1a10d14f30c2a99b313c86b981906c54c07b9",
+		LatestImage:      "some-registry.io/some/repo@sha256:27227f3eaf20afcd527f31bcaaa1a10d14f30c2a99b313c86b981906c54c07b9",
+		LifecycleVersion: "1.2.3",
 	}
 
 	pod := &corev1.Pod{
@@ -125,20 +126,19 @@ func testAttester(t *testing.T, when spec.G, it spec.S) {
 	attester := &Attester{
 		Version: "v0.0.0",
 
-		LifecycleProvider: &fakeLifecycleProvider{},
-		ImageReader:       r,
+		ImageReader: r,
 
 		Images: config.Images{
-			BuildInitImage: "build-init-image", BuildInitWindowsImage: "build-init-windows-image",
+			BuildInitImage:   "build-init-image",
 			BuildWaiterImage: "build-waiter-image",
-			CompletionImage:  "completion-image", CompletionWindowsImage: "completion-windows-image",
-			RebaseImage: "rebase-image",
+			CompletionImage:  "completion-image",
+			RebaseImage:      "rebase-image",
 		},
 		Config:   config.Config{EnablePriorityClasses: false, MaximumPlatformApiVersion: "", SshTrustUnknownHosts: true},
 		Features: config.FeatureFlags{InjectedSidecarSupport: false},
 	}
 
-	it("", func() {
+	it("returns the expected, properly indented statement", func() {
 		stmt, err := attester.AttestBuild(build, buildMetadata, pod, authn.DefaultKeychain, UnsignedBuildID)
 		require.NoError(t, err)
 
@@ -190,10 +190,8 @@ func testAttester(t *testing.T, when spec.G, it spec.S) {
         "sshTrustUnknownHosts": true,
         "scalingFactor": 0,
         "buildInitImage": "build-init-image",
-        "buildInitWindowsImage": "build-init-windows-image",
         "buildWaiterImage": "build-waiter-image",
         "completionImage": "completion-image",
-        "completionWindowsImage": "completion-windows-image",
         "rebaseImage": "rebase-image",
         "injectedSidecarSupport": false,
         "generateSlsaAttestation": false
@@ -299,15 +297,4 @@ func testAttester(t *testing.T, when spec.G, it spec.S) {
 			)
 		})
 	})
-}
-
-type fakeLifecycleProvider struct {
-}
-
-func (l *fakeLifecycleProvider) Metadata() (cnb.LifecycleMetadata, error) {
-	return cnb.LifecycleMetadata{
-		LifecycleInfo: cnb.LifecycleInfo{
-			Version: "1.2.3",
-		},
-	}, nil
 }

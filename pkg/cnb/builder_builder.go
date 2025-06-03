@@ -10,7 +10,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/Masterminds/semver/v3"
-	"github.com/buildpacks/imgutil/layer"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -51,6 +50,8 @@ type builderBlder struct {
 	runImage          string
 	mixins            []string
 	os                string
+	arch              string
+	archVariant       string
 	additionalLabels  map[string]string
 }
 
@@ -66,7 +67,12 @@ func (bb *builderBlder) AddStack(baseImage v1.Image, clusterStack *buildapi.Clus
 		return err
 	}
 
+	if file.OS == "windows" {
+		return errors.New("windows base images are not supported")
+	}
 	bb.os = file.OS
+	bb.arch = file.Architecture
+	bb.archVariant = file.Variant
 	bb.baseImage = baseImage
 	bb.stackId = clusterStack.Status.Id
 	bb.mixins = clusterStack.Status.Mixins
@@ -357,11 +363,7 @@ func (bb *builderBlder) rootOwnedDir(path string) *tar.Header {
 }
 
 func (bb *builderBlder) layerWriter(fileWriter io.Writer) layerWriter {
-	if bb.os == "windows" {
-		return layer.NewWindowsWriter(fileWriter)
-	}
 	return tar.NewWriter(fileWriter)
-
 }
 
 type layerWriter interface {

@@ -99,7 +99,10 @@ func NewController(
 
 	impl := controller.NewContext(ctx, c, controller.ControllerOptions{WorkQueueName: ReconcilerName, Logger: logger})
 
-	informer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
+	informer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
+		FilterFunc: reconciler.FilterDeletionTimestamp,
+		Handler:    controller.HandleAll(impl.Enqueue),
+	})
 
 	podInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: controller.FilterControllerGK(buildapi.SchemeGroupVersion.WithKind(Kind).GroupKind()),
@@ -174,31 +177,9 @@ func (c *Reconciler) reconcile(ctx context.Context, build *buildapi.Build) error
 	}
 
 	if build.MetadataReady(pod) {
-		var buildMetadata *cnb.BuildMetadata
-		if pod.Spec.NodeSelector != nil && pod.Spec.NodeSelector[k8sOSLabel] == "windows" {
-			cacheTag := ""
-			if build.Spec.NeedRegistryCache() {
-				cacheTag = build.Spec.Cache.Registry.Tag
-			}
-
-			keychain, err := c.KeychainFactory.KeychainForSecretRef(ctx, registry.SecretRef{
-				ServiceAccount: build.Spec.ServiceAccountName,
-				Namespace:      build.Namespace,
-			})
-
-			if err != nil {
-				return fmt.Errorf("unable to create app image keychain: %v", err)
-			}
-
-			buildMetadata, err = c.MetadataRetriever.GetBuildMetadata(build.Tag(), cacheTag, keychain)
-			if err != nil {
-				return err
-			}
-		} else {
-			buildMetadata, err = c.buildMetadataFromBuildPod(pod)
-			if err != nil {
-				return fmt.Errorf("failed to get build metadata from build pod: %v", err)
-			}
+		buildMetadata, err := c.buildMetadataFromBuildPod(pod)
+		if err != nil {
+			return fmt.Errorf("failed to get build metadata from build pod: %v", err)
 		}
 
 		var attestDigest string
@@ -215,6 +196,7 @@ func (c *Reconciler) reconcile(ctx context.Context, build *buildapi.Build) error
 		build.Status.LatestAttestationImage = attestDigest
 		build.Status.Stack.RunImage = buildMetadata.StackRunImage
 		build.Status.Stack.ID = buildMetadata.StackID
+		build.Status.LifecycleVersion = buildMetadata.LifecycleVersion
 	}
 
 	build.Status.PodName = pod.Name
