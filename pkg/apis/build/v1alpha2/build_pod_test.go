@@ -2458,6 +2458,51 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 				)
 			})
 		})
+
+		when("custom volumes and mounts", func() {
+			it("attaches user-supplied volumes and mounts to all init containers", func() {
+				build.Spec.Volumes = []corev1.Volume{
+					{
+						Name: "sqlite-pvc",
+						VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+								ClaimName: "my-sqlite-pvc",
+							},
+						},
+					},
+				}
+				build.Spec.VolumeMounts = []corev1.VolumeMount{
+					{
+						Name:      "sqlite-pvc",
+						MountPath: "/workspace/sqlite",
+						ReadOnly:  false,
+					},
+				}
+
+				pod, err := build.BuildPod(config, buildContext)
+				require.NoError(t, err)
+
+				// Check that the volume is present in the pod spec
+				found := false
+				for _, v := range pod.Spec.Volumes {
+					if v.Name == "sqlite-pvc" && v.VolumeSource.PersistentVolumeClaim != nil && v.VolumeSource.PersistentVolumeClaim.ClaimName == "my-sqlite-pvc" {
+						found = true
+					}
+				}
+				assert.True(t, found, "sqlite-pvc volume should be present in pod spec")
+
+				// Check that the mount is present in all init containers
+				for _, c := range pod.Spec.InitContainers {
+					foundMount := false
+					for _, m := range c.VolumeMounts {
+						if m.Name == "sqlite-pvc" && m.MountPath == "/workspace/sqlite" {
+							foundMount = true
+						}
+					}
+					assert.True(t, foundMount, "sqlite-pvc mount should be present in init container %s", c.Name)
+				}
+			})
+		})
 	})
 }
 

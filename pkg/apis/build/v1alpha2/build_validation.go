@@ -25,7 +25,7 @@ func (b *Build) Validate(ctx context.Context) *apis.FieldError {
 }
 
 func (bs *BuildSpec) Validate(ctx context.Context) *apis.FieldError {
-	return validate.ListNotEmpty(bs.Tags, "tags").
+	err := validate.ListNotEmpty(bs.Tags, "tags").
 		Also(validate.Tags(bs.Tags, "tags")).
 		Also(bs.Cache.Validate(ctx).ViaField("cache")).
 		Also(bs.Builder.Validate(ctx).ViaField("builder")).
@@ -36,6 +36,25 @@ func (bs *BuildSpec) Validate(ctx context.Context) *apis.FieldError {
 		Also(validateCnbBindings(ctx, bs.CNBBindings).ViaField("cnbBindings")).
 		Also(bs.validateNodeSelector(ctx)).
 		Also(validateNotary(ctx, bs.Notary).ViaField("notary"))
+
+	// Validate that all volumeMounts refer to a defined volume
+	volumeNames := make(map[string]struct{})
+	for _, v := range bs.Volumes {
+		if _, exists := volumeNames[v.Name]; exists {
+			err = err.Also(apis.ErrGeneric("duplicate volume name", "volumes", v.Name))
+		}
+		volumeNames[v.Name] = struct{}{}
+	}
+	for i, m := range bs.VolumeMounts {
+		if m.Name == "" {
+			err = err.Also(apis.ErrMissingField("name").ViaField("volumeMounts").ViaIndex(i))
+			continue
+		}
+		if _, ok := volumeNames[m.Name]; !ok {
+			err = err.Also(apis.ErrInvalidValue(m.Name, "volumeMounts").ViaIndex(i).Also(apis.ErrGeneric("volumeMount refers to undefined volume", "volumeMounts", m.Name)))
+		}
+	}
+	return err
 }
 
 func resourceCreatedByKpackController(info *authv1.UserInfo) bool {

@@ -76,6 +76,8 @@ func (is *ImageSpec) convertTo(to *v1alpha1.ImageSpec) {
 		to.Build.Env = is.Build.Env
 		to.Build.Resources = is.Build.Resources
 		to.Build.Bindings = is.Build.CNBBindings
+		to.Build.VolumeMounts = is.Build.VolumeMounts
+		to.Build.Volumes = is.Build.Volumes
 	}
 }
 
@@ -283,6 +285,8 @@ func (is *ImageSpec) convertFrom(from *v1alpha1.ImageSpec) {
 		is.Build.Env = from.Build.Env
 		is.Build.Resources = from.Build.Resources
 		is.Build.CNBBindings = from.Build.Bindings
+		is.Build.VolumeMounts = from.Build.VolumeMounts
+		is.Build.Volumes = from.Build.Volumes
 	}
 }
 
