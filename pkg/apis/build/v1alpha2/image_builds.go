@@ -82,6 +82,8 @@ func (im *Image) Build(sourceResolver *SourceResolver, builder BuilderResource, 
 			PriorityClassName:     priorityClass,
 			ActiveDeadlineSeconds: im.BuildTimeout(),
 			CreationTime:          im.Spec.creationTime(),
+			Volumes:               im.Volumes(),
+			VolumeMounts:          im.VolumeMounts(),
 		},
 	}
 }
@@ -303,4 +305,18 @@ func (is *ImageSpec) creationTime() string {
 	}
 
 	return ""
+}
+
+func (im *Image) Volumes() []corev1.Volume {
+	if im.Spec.Build == nil {
+		return nil
+	}
+	return im.Spec.Build.Volumes
+}
+
+func (im *Image) VolumeMounts() []corev1.VolumeMount {
+	if im.Spec.Build == nil {
+		return nil
+	}
+	return im.Spec.Build.VolumeMounts
 }

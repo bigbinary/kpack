@@ -79,6 +79,8 @@ type ImageBuild struct {
 	SchedulerName        string              `json:"schedulerName,omitempty"`
 	BuildTimeout         *int64              `json:"buildTimeout,omitempty"`
 	CreationTime         string              `json:"creationTime,omitempty"`
+	VolumeMounts  		 []corev1.VolumeMount 	`json:"volumeMounts,omitempty"`
+    Volumes       		 []corev1.Volume      	`json:"volumes,omitempty"`
 }
 
 // +k8s:openapi-gen=true

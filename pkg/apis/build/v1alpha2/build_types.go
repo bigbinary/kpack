@@ -78,6 +78,8 @@ type BuildSpec struct {
 	SchedulerName     string              `json:"schedulerName,omitempty"`
 	PriorityClassName string              `json:"priorityClassName,omitempty"`
 	CreationTime      string              `json:"creationTime,omitempty"`
+	VolumeMounts 	  []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+    Volumes           []corev1.Volume      `json:"volumes,omitempty"`
 }
 
 func (bs *BuildSpec) RegistryCacheTag() string {

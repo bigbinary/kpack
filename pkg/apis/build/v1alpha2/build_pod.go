@@ -272,7 +272,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 			layersMount,
 			workspaceVolume,
 			homeMount,
-		}),
+		}, b.Spec.VolumeMounts),
 		Env: []corev1.EnvVar{
 			homeEnv,
 			platformApiVersionEnvVar,
@@ -295,7 +295,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 			layersMount,
 			platformMount,
 			workspaceVolume,
-		}, bindingVolumeMounts),
+		}, bindingVolumeMounts, b.Spec.VolumeMounts),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Env: []corev1.EnvVar{
 			platformApiVersionEnvVar,
@@ -355,6 +355,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 								reportMount,
 								notaryV1Mount,
 							},
+							b.Spec.VolumeMounts,
 						),
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						SecurityContext: containerSecurityContext(),
@@ -425,6 +426,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 								homeMount,
 								projectMetadataMount,
 							},
+							b.Spec.VolumeMounts,
 						),
 					},
 				)
@@ -446,7 +448,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 						VolumeMounts: volumeMounts([]corev1.VolumeMount{
 							layersMount,
 							homeMount,
-						}, cacheVolumes),
+						}, cacheVolumes, b.Spec.VolumeMounts),
 						Env: []corev1.EnvVar{
 							homeEnv,
 							platformApiVersionEnvVar,
@@ -471,7 +473,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							layersMount,
 							platformMount,
 							workspaceVolume,
-						}, bindingVolumeMounts),
+						}, bindingVolumeMounts, b.Spec.VolumeMounts),
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Env: []corev1.EnvVar{
 							platformApiVersionEnvVar,
@@ -508,7 +510,7 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 							workspaceVolume,
 							homeMount,
 							reportMount,
-						}, cacheVolumes),
+						}, cacheVolumes, b.Spec.VolumeMounts),
 						Env: envs(
 							[]corev1.EnvVar{
 								homeEnv,
@@ -581,7 +583,10 @@ func (b *Build) BuildPod(images BuildPodImages, buildContext BuildContext) (*cor
 					b.Spec.Source.Source().ImagePullSecretsVolume(registrySourcePullSecretsVolumeName),
 					b.notarySecretVolume(),
 				},
-				bindingVolumes),
+				b.Spec.Volumes,
+				bindingVolumes,
+			),
+
 			ImagePullSecrets: b.Spec.Builder.ImagePullSecrets,
 		},
 	}
@@ -647,15 +652,19 @@ func (b *Build) useStandardContainers(buildWaiterImage string, pod *corev1.Pod) 
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			WorkingDir:      "/workspace",
 			VolumeMounts: volumeMounts(
-				[]corev1.VolumeMount{
-					buildWaitMount,
-				},
+				append(
+					[]corev1.VolumeMount{buildWaitMount},
+					b.Spec.VolumeMounts...,
+				),
 			),
 		},
 	}
+
 	pod.Spec.Containers = append(containers, pod.Spec.Containers...)
 
 	for i := 0; i < len(pod.Spec.Containers); i++ {
+		pod.Spec.Containers[i].VolumeMounts = append(pod.Spec.Containers[i].VolumeMounts, b.Spec.VolumeMounts...)
+
 		if i == 0 {
 			pod.Spec.Containers[i].VolumeMounts = append(pod.Spec.Containers[i].VolumeMounts, downwardMount)
 			pod.Spec.Containers[i] = setUpBuildWaiter(pod.Spec.Containers[i], "/downward/sidecars-ready")
@@ -688,6 +697,8 @@ func (b *Build) useStandardContainers(buildWaiterImage string, pod *corev1.Pod) 
 			},
 		},
 	)
+
+	pod.Spec.Volumes = append(pod.Spec.Volumes, b.Spec.Volumes...)
 
 	delete(pod.Annotations, IstioInject)
 	return pod
@@ -847,6 +858,7 @@ func (b *Build) rebasePod(buildContext BuildContext, images BuildPodImages) (*co
 						[]corev1.VolumeMount{
 							reportMount,
 						},
+						b.Spec.VolumeMounts,
 					),
 				},
 			},
