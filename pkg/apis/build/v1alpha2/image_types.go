@@ -72,13 +72,15 @@ type ImageBuild struct {
 	Env       []corev1.EnvVar             `json:"env,omitempty"`
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 	// +listType
-	Tolerations          []corev1.Toleration `json:"tolerations,omitempty"`
-	NodeSelector         map[string]string   `json:"nodeSelector,omitempty"`
-	Affinity             *corev1.Affinity    `json:"affinity,omitempty"`
-	RuntimeClassName     *string             `json:"runtimeClassName,omitempty"`
-	SchedulerName        string              `json:"schedulerName,omitempty"`
-	BuildTimeout         *int64              `json:"buildTimeout,omitempty"`
-	CreationTime         string              `json:"creationTime,omitempty"`
+	Tolerations      []corev1.Toleration  `json:"tolerations,omitempty"`
+	NodeSelector     map[string]string    `json:"nodeSelector,omitempty"`
+	Affinity         *corev1.Affinity     `json:"affinity,omitempty"`
+	RuntimeClassName *string              `json:"runtimeClassName,omitempty"`
+	SchedulerName    string               `json:"schedulerName,omitempty"`
+	BuildTimeout     *int64               `json:"buildTimeout,omitempty"`
+	CreationTime     string               `json:"creationTime,omitempty"`
+	VolumeMounts     []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+	Volumes          []corev1.Volume      `json:"volumes,omitempty"`
 }
 
 // +k8s:openapi-gen=true

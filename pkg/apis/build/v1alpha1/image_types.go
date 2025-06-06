@@ -63,6 +63,10 @@ type ImageBuild struct {
 	// +listType
 	Env       []corev1.EnvVar             `json:"env,omitempty"`
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// +listType
+	Volumes []corev1.Volume `json:"volumes,omitempty"`
+	// +listType
+	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // +k8s:openapi-gen=true
